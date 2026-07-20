@@ -33,3 +33,41 @@ packages = ["src/ssfl"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+# Flower app manifest. serverapp/clientapp targets are built in M5 (Flower runtime integration);
+# the manifest is declared now so `flwr run .` becomes usable the moment those modules land,
+# without a second round of pyproject.toml surgery. Config keys mirror ExperimentConfig field
+# names (hyphenated, matching flwr's run-config convention) and default to the paper profile.
+[tool.flwr.app]
+publisher = "ssfl-reproduction"
+
+[tool.flwr.app.components]
+serverapp = "ssfl.server_app:app"
+clientapp = "ssfl.client_app:app"
+
+[tool.flwr.app.config]
+profile = "paper"
+run-kind = "paper"
+algorithm = "ssfl"
+backbone = "cnn"
+scenario = 1
+seed = 2023
+num-server-rounds = 200
+local-epochs = 5
+batch-size = 80
+paper-text-batch = false
+learning-rate = 1.0e-4
+device = "auto"
+deterministic = true
+ssfl-threshold-policy = "median"
+ssfl-discriminator-mode = "enabled"
+ssfl-voting-mode = "enabled"
+ssfl-label-representation = "hard"
+dsfl-temperature = 0.1
+checkpoint-interval = 10
+
+[tool.flwr.federations]
+default = "local-simulation"
+
+[tool.flwr.federations.local-simulation]
+options.num-supernodes = 27
