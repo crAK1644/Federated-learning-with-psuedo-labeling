@@ -23,7 +23,6 @@ device information ... before training begins".
 from __future__ import annotations
 
 import json
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any

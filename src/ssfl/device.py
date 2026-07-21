@@ -17,9 +17,18 @@ from ssfl.config import DeviceKind
 logger = logging.getLogger("ssfl.device")
 
 
+def _cpu_device() -> torch.device:
+    # Simulation runs many client processes (Ray actors) concurrently, each defaulting to a
+    # full-core OMP thread pool; that oversubscribes the machine and the fork/join barrier
+    # overhead dwarfs actual compute for this model's tiny tensors. One thread per process is
+    # faster in aggregate than N threads x N concurrent processes.
+    torch.set_num_threads(1)
+    return torch.device("cpu")
+
+
 def resolve_device(requested: DeviceKind, deterministic: bool) -> torch.device:
     if requested == DeviceKind.cpu:
-        return torch.device("cpu")
+        return _cpu_device()
 
     if requested == DeviceKind.cuda:
         if not torch.cuda.is_available():
@@ -47,7 +56,7 @@ def resolve_device(requested: DeviceKind, deterministic: bool) -> torch.device:
                 "device=auto with deterministic=True: MPS is available but not used for "
                 "determinism reasons (see REPRODUCIBILITY.md #12); falling back to cpu."
             )
-        return torch.device("cpu")
+        return _cpu_device()
     if torch.backends.mps.is_available():
         return torch.device("mps")
-    return torch.device("cpu")
+    return _cpu_device()

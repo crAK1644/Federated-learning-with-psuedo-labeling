@@ -150,20 +150,33 @@ def _ssfl_train(context, exp_config, device, server_round, client_id, private, m
         batch_size=exp_config.effective_batch_size,
         threshold_policy=exp_config.ssfl_threshold_policy,
         seed=_seed(exp_config.seed, server_round, 0),
+        discriminator_mode=exp_config.ssfl_discriminator_mode,
+        label_representation=exp_config.ssfl_label_representation,
+        soft_round_decimals=exp_config.ssfl_soft_label_round_decimals,
     )
     _save_model(context, "classifier", classifier)
     _save_model(context, "discriminator", discriminator)
 
+    # Exactly one of pseudo_labels/soft_probs is set (matches ssfl_label_representation); only
+    # send the populated one over the wire.
+    payload = {"confidences": result.confidences}
+    if result.pseudo_labels is not None:
+        payload["pseudo_labels"] = result.pseudo_labels
+    else:
+        payload["soft_probs"] = result.soft_probs
+
     reply = RecordDict(
         {
-            "arrays": array_record_from_numpy(
-                {"pseudo_labels": result.pseudo_labels, "confidences": result.confidences}
-            ),
+            "arrays": array_record_from_numpy(payload),
             "metrics": MetricRecord(
                 {
                     "threshold": result.threshold,
                     "classifier_loss": result.classifier_loss,
-                    "discriminator_loss": result.discriminator_loss,
+                    # discriminator_mode != enabled never trains a discriminator; MetricRecord
+                    # can't hold None, so a disabled discriminator is unambiguously 0.0 here.
+                    "discriminator_loss": result.discriminator_loss
+                    if result.discriminator_loss is not None
+                    else 0.0,
                     "num-examples": len(private),
                 }
             ),

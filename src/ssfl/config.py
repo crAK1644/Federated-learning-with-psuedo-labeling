@@ -321,14 +321,18 @@ def experiment_config_from_run_config(run_config: dict[str, Any]) -> ExperimentC
     ``paper``) underneath the flat overrides -- the same merge ``load_experiment_config`` does for
     the CLI path -- so profile-only fields like ``checkpoint_rounds`` stay consistent with
     ``num_server_rounds`` without needing to be repeated in every ``--run-config`` string. Falls
-    back to validating the overrides alone if the profile file isn't found (e.g. a custom profile
-    name meant to be fully specified via overrides).
+    back to ``artifacts/generated_configs/<profile>.yaml`` (where ``experiments/run_suite.py``
+    writes one resolved profile per matrix entry, since Flower's ``--run-config`` allowlist can't
+    carry the ablation/threshold/label-study knobs directly), then to validating the overrides
+    alone if neither file exists (e.g. a custom profile name meant to be fully specified via
+    overrides).
     """
     overrides = {_normalize_key(k): v for k, v in run_config.items()}
     profile = overrides.get("profile", "paper")
-    profile_path = Path(__file__).resolve().parent.parent.parent / "configs" / f"{profile}.yaml"
-    if profile_path.exists():
-        return load_experiment_config(profile_path, overrides)
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    for candidate in (repo_root / "configs" / f"{profile}.yaml", repo_root / "artifacts" / "generated_configs" / f"{profile}.yaml"):
+        if candidate.exists():
+            return load_experiment_config(candidate, overrides)
     return ExperimentConfig.model_validate(overrides)
 
 

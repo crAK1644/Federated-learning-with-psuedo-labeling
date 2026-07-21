@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from flwr.common import ConfigRecord, Message, MessageType, RecordDict
+from flwr.common import ArrayRecord, ConfigRecord, Message, MessageType, RecordDict
 from flwr.serverapp import Grid
 from flwr.serverapp.strategy import Strategy
 from flwr.serverapp.strategy.strategy_utils import aggregate_metricrecords, sample_nodes
@@ -35,7 +35,10 @@ class FDStrategy(Strategy):
         node_ids, _ = sample_nodes(grid, self.num_clients, self.num_clients)
         self._current_node_ids = node_ids
         config["server-round"] = server_round
-        record = RecordDict({"arrays": arrays, "config": config})
+        # ponytail: local training never needs model params or the prior round's leave-self-out
+        # targets (clients only read config["server-round"]); empty ArrayRecord avoids re-shipping
+        # the previous evaluate phase's global_sum/contributor_counts on every train message.
+        record = RecordDict({"arrays": ArrayRecord(), "config": config})
         return [Message(record, message_type=MessageType.TRAIN, dst_node_id=n) for n in node_ids]
 
     def aggregate_train(self, server_round: int, replies: Iterable[Message]):

@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from torch.utils.data import TensorDataset
 
-from ssfl.config import ThresholdPolicy
+from ssfl.config import DiscriminatorMode, LabelRepresentation, ThresholdPolicy
 from ssfl.models import SSFLModel
 from ssfl.protocols.message import Envelope
 from ssfl.training import evaluate, make_loader, predict_probs, train_supervised
@@ -30,11 +30,16 @@ ABSTAIN = -1
 @dataclass(frozen=True)
 class ProposalResult:
     client_id: str
-    pseudo_labels: np.ndarray  # int64, ABSTAIN(-1) or class index, len == num_open
+    # Exactly one of pseudo_labels/soft_probs is set, matching ssfl_label_representation:
+    # hard -> pseudo_labels (int64, ABSTAIN(-1) or class index); soft -> soft_probs (float32,
+    # (num_open, num_classes), an all-zero row standing in for "unfamiliar" -- softmax output
+    # never legitimately sums to 0, so a zero row is unambiguous).
+    pseudo_labels: np.ndarray | None
     confidences: np.ndarray  # float32, len == num_open (classifier max-prob; audit-only)
     threshold: float
     classifier_loss: float
-    discriminator_loss: float
+    discriminator_loss: float | None  # None when discriminator_mode != enabled (never trained)
+    soft_probs: np.ndarray | None = None
 
 
 def compute_threshold(confidences: np.ndarray, policy: ThresholdPolicy) -> float:
@@ -57,9 +62,15 @@ def client_proposal_step(
     batch_size: int,
     threshold_policy: ThresholdPolicy,
     seed: int,
+    discriminator_mode: DiscriminatorMode = DiscriminatorMode.enabled,
+    label_representation: LabelRepresentation = LabelRepresentation.hard,
+    soft_round_decimals: int | None = None,
 ) -> ProposalResult:
-    """Phase A: train classifier on private data, score the open set, train the discriminator on
-    private(familiar)/low-confidence-open(unfamiliar), then hard-filter open predictions."""
+    """Phase A: train classifier on private data, score the open set, then decide which open
+    examples are "familiar" one of three ways (``discriminator_mode``) and encode the result one
+    of two ways (``label_representation``) -- the two independent axes the paper's five ablations
+    are combinations of (full / no-discriminator / no-voting / no-discriminator-or-voting /
+    simple-filtering; see ``REPRODUCIBILITY.md``)."""
     private_loader = make_loader(private_dataset, batch_size, shuffle=True, seed=seed)
     classifier_result = train_supervised(classifier, private_loader, device, epochs, lr)
 
@@ -67,33 +78,49 @@ def client_proposal_step(
     open_probs = predict_probs(classifier, open_loader, device)
     confidences = open_probs.max(dim=1).values.numpy()
     threshold = compute_threshold(confidences, threshold_policy)
-
-    # Discriminator targets: private examples are "familiar" (class 0), low-confidence open
-    # examples are "unfamiliar" (class 1) -- the paper's discriminator dataset construction.
-    unfamiliar_mask = confidences < threshold
-    unfamiliar_x = open_dataset.x[torch.from_numpy(unfamiliar_mask)]
-    disc_x = torch.cat([private_dataset.x, unfamiliar_x], dim=0)
-    disc_y = torch.cat(
-        [
-            torch.zeros(private_dataset.x.shape[0], dtype=torch.long),
-            torch.ones(unfamiliar_x.shape[0], dtype=torch.long),
-        ]
-    )
-    disc_loader = make_loader(TensorDataset(disc_x, disc_y), batch_size, shuffle=True, seed=seed)
-    discriminator_result = train_supervised(discriminator, disc_loader, device, epochs, lr)
-
-    familiar_probs = predict_probs(discriminator, open_loader, device)
-    familiar_mask = familiar_probs.argmax(dim=1).numpy() == 0
     class_predictions = open_probs.argmax(dim=1).numpy()
-    pseudo_labels = np.where(familiar_mask, class_predictions, ABSTAIN).astype(np.int64)
+
+    discriminator_loss: float | None = None
+    if discriminator_mode == DiscriminatorMode.disabled:
+        familiar_mask = np.ones(len(confidences), dtype=bool)
+    elif discriminator_mode == DiscriminatorMode.simple_filter:
+        familiar_mask = confidences >= threshold
+    else:
+        # Discriminator targets: private examples are "familiar" (class 0), low-confidence open
+        # examples are "unfamiliar" (class 1) -- the paper's discriminator dataset construction.
+        unfamiliar_mask = confidences < threshold
+        unfamiliar_x = open_dataset.x[torch.from_numpy(unfamiliar_mask)]
+        disc_x = torch.cat([private_dataset.x, unfamiliar_x], dim=0)
+        disc_y = torch.cat(
+            [
+                torch.zeros(private_dataset.x.shape[0], dtype=torch.long),
+                torch.ones(unfamiliar_x.shape[0], dtype=torch.long),
+            ]
+        )
+        disc_loader = make_loader(TensorDataset(disc_x, disc_y), batch_size, shuffle=True, seed=seed)
+        discriminator_result = train_supervised(discriminator, disc_loader, device, epochs, lr)
+        familiar_probs = predict_probs(discriminator, open_loader, device)
+        familiar_mask = familiar_probs.argmax(dim=1).numpy() == 0
+        discriminator_loss = discriminator_result.final_loss
+
+    if label_representation == LabelRepresentation.hard:
+        pseudo_labels = np.where(familiar_mask, class_predictions, ABSTAIN).astype(np.int64)
+        soft_probs = None
+    else:
+        soft = np.where(familiar_mask[:, None], open_probs.numpy(), 0.0).astype(np.float32)
+        if soft_round_decimals is not None:
+            soft = np.round(soft, decimals=soft_round_decimals).astype(np.float32)
+        pseudo_labels = None
+        soft_probs = soft
 
     return ProposalResult(
         client_id=client_id,
         pseudo_labels=pseudo_labels,
+        soft_probs=soft_probs,
         confidences=confidences.astype(np.float32),
         threshold=threshold,
         classifier_loss=classifier_result.final_loss,
-        discriminator_loss=discriminator_result.final_loss,
+        discriminator_loss=discriminator_loss,
     )
 
 
@@ -153,6 +180,46 @@ def aggregate_votes(
         participating_counts=votes.sum(axis=1),
         tie_count=tie_count,
         all_abstain_count=all_abstain_count,
+        rejected=tuple(rejected),
+    )
+
+
+def aggregate_soft(
+    proposals: list[tuple[Envelope, ProposalResult]], num_open: int, num_classes: int
+) -> AggregationResult:
+    """No-voting variant (``ssfl_voting_mode=disabled``): mean the masked soft probability
+    vectors (an all-zero row = that client found the example unfamiliar) across clients per open
+    index, then argmax -> hard global label. Same idempotent-under-duplicate-sender behavior as
+    ``aggregate_votes``. ``votes_per_class`` doesn't apply to a soft mean, so it's left zeroed
+    rather than repurposed to hold something misleading."""
+    seen_senders: set[str] = set()
+    sum_probs = np.zeros((num_open, num_classes), dtype=np.float64)
+    counts = np.zeros(num_open, dtype=np.int64)
+    rejected: list[tuple[str, str]] = []
+    for envelope, result in proposals:
+        if envelope.sender_id in seen_senders:
+            rejected.append((envelope.sender_id, "duplicate sender in aggregation batch"))
+            continue
+        seen_senders.add(envelope.sender_id)
+        probs = result.soft_probs
+        mask = probs.sum(axis=1) > 0
+        sum_probs[mask] += probs[mask]
+        counts[mask] += 1
+
+    valid_mask = counts > 0
+    global_labels = np.full(num_open, ABSTAIN, dtype=np.int64)
+    idx = np.nonzero(valid_mask)[0]
+    if len(idx):
+        mean_probs = (sum_probs[idx] / counts[idx, None]).astype(np.float32)
+        global_labels[idx] = mean_probs.argmax(axis=1)
+
+    return AggregationResult(
+        global_labels=global_labels,
+        valid_mask=valid_mask,
+        votes_per_class=np.zeros((num_open, num_classes), dtype=np.int64),
+        participating_counts=counts,
+        tie_count=0,
+        all_abstain_count=int((~valid_mask).sum()),
         rejected=tuple(rejected),
     )
 

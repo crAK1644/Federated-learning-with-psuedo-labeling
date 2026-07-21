@@ -16,10 +16,12 @@ from flwr.common import ArrayRecord, ConfigRecord, Context, MetricRecord
 from flwr.serverapp import Grid, ServerApp
 from flwr.serverapp.strategy import FedAvg
 
+from ssfl.comms import CommsTrackingStrategy
 from ssfl.config import Algorithm, experiment_config_from_run_config
 from ssfl.data.datasets import load_open_data, load_test_data
 from ssfl.device import resolve_device
-from ssfl.models import build_classifier
+from ssfl.metrics import MetricsLedger, compute_classification_metrics
+from ssfl.models import NUM_CLASSES, build_classifier
 from ssfl.protocols import dsfl as dsfl_protocol
 from ssfl.protocols import fl as fl_protocol
 from ssfl.protocols.ssfl import AggregationResult, server_distillation_step
@@ -45,6 +47,7 @@ def main(grid: Grid, context: Context) -> None:
         manifest_hash = json.loads(manifest_path.read_text()).get("manifest_hash")
 
     run_context = RunContext.create(exp_config, dataset_manifest_path=manifest_path)
+    metrics_ledger = MetricsLedger()
 
     train_config = ConfigRecord()
     evaluate_config = ConfigRecord()
@@ -63,7 +66,7 @@ def main(grid: Grid, context: Context) -> None:
         server_classifier = build_classifier(exp_config.backbone)
 
         def evaluate_fn(server_round: int, arrays: ArrayRecord) -> MetricRecord | None:
-            metrics = fl_protocol.server_evaluate(
+            eval_metrics = fl_protocol.server_evaluate(
                 server_classifier,
                 arrays.to_torch_state_dict(),
                 test_dataset,
@@ -71,7 +74,17 @@ def main(grid: Grid, context: Context) -> None:
                 batch_size=exp_config.effective_batch_size,
                 seed=exp_config.seed,
             )
-            return MetricRecord({"loss": metrics["loss"], "accuracy": metrics["accuracy"]})
+            classification = compute_classification_metrics(
+                eval_metrics["y_true"], eval_metrics["y_pred"], NUM_CLASSES
+            )
+            metrics_ledger.record(
+                algorithm=exp_config.algorithm.value,
+                scenario=exp_config.scenario.value,
+                round=server_round,
+                loss=eval_metrics["loss"],
+                metrics=classification,
+            )
+            return MetricRecord({"loss": eval_metrics["loss"], "accuracy": eval_metrics["accuracy"]})
 
     elif exp_config.algorithm is Algorithm.ssfl:
         if manifest_hash is None:
@@ -83,6 +96,7 @@ def main(grid: Grid, context: Context) -> None:
             dataset_manifest_hash=manifest_hash,
             num_open=len(open_dataset),
             num_clients=exp_config.num_clients(),
+            voting_mode=exp_config.ssfl_voting_mode,
         )
         initial_arrays = ArrayRecord()
         seed_everything(exp_config.seed)
@@ -112,6 +126,18 @@ def main(grid: Grid, context: Context) -> None:
                 lr=exp_config.learning_rate,
                 batch_size=exp_config.effective_batch_size,
                 seed=exp_config.seed,
+            )
+            classification = compute_classification_metrics(
+                eval_metrics["y_true"], eval_metrics["y_pred"], NUM_CLASSES
+            )
+            metrics_ledger.record(
+                algorithm=exp_config.algorithm.value,
+                scenario=exp_config.scenario.value,
+                round=server_round,
+                loss=eval_metrics["loss"],
+                train_loss=train_result.final_loss,
+                metrics=classification,
+                valid_rate=float(valid_mask.mean()),
             )
             return MetricRecord(
                 {"loss": eval_metrics["loss"], "accuracy": eval_metrics["accuracy"], "train_loss": train_result.final_loss}
@@ -147,6 +173,17 @@ def main(grid: Grid, context: Context) -> None:
             eval_metrics = dsfl_protocol.server_evaluate(
                 server_classifier, test_dataset, device, batch_size=exp_config.effective_batch_size, seed=exp_config.seed
             )
+            classification = compute_classification_metrics(
+                eval_metrics["y_true"], eval_metrics["y_pred"], NUM_CLASSES
+            )
+            metrics_ledger.record(
+                algorithm=exp_config.algorithm.value,
+                scenario=exp_config.scenario.value,
+                round=server_round,
+                loss=eval_metrics["loss"],
+                train_loss=train_result.final_loss,
+                metrics=classification,
+            )
             return MetricRecord(
                 {"loss": eval_metrics["loss"], "accuracy": eval_metrics["accuracy"], "train_loss": train_result.final_loss}
             )
@@ -154,7 +191,8 @@ def main(grid: Grid, context: Context) -> None:
     else:
         raise ValueError(f"unknown algorithm {exp_config.algorithm}")
 
-    result = strategy.start(
+    tracked_strategy = CommsTrackingStrategy(strategy, exp_config.algorithm.value, exp_config.scenario.value)
+    result = tracked_strategy.start(
         grid,
         initial_arrays,
         num_rounds=exp_config.num_server_rounds,
@@ -162,6 +200,8 @@ def main(grid: Grid, context: Context) -> None:
         evaluate_config=evaluate_config,
         evaluate_fn=evaluate_fn,
     )
+    tracked_strategy.ledger.write_parquet(run_context.run_dir / "communication.parquet")
+    metrics_ledger.write(run_context.run_dir)
 
     final_round = max(result.evaluate_metrics_serverapp) if result.evaluate_metrics_serverapp else None
     run_context.write_summary(

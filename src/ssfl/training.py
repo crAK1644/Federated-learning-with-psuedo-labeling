@@ -7,6 +7,7 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass, field
 
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
@@ -119,18 +120,29 @@ def train_distillation(
 
 
 @torch.no_grad()
-def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> dict[str, float]:
+def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> dict:
+    """Loss/accuracy plus ``y_true``/``y_pred`` (loader order) so callers can compute richer
+    metrics (macro P/R/F1, confusion matrix -- see ``metrics.py``) without a second pass."""
     model.to(device)
     model.eval()
     criterion = nn.CrossEntropyLoss(reduction="sum")
     total_loss, correct, total = 0.0, 0, 0
+    y_true, y_pred = [], []
     for x, y in loader:
         x, y = x.to(device), y.to(device)
         logits = model(x)
         total_loss += criterion(logits, y).item()
-        correct += (logits.argmax(dim=-1) == y).sum().item()
+        preds = logits.argmax(dim=-1)
+        correct += (preds == y).sum().item()
         total += x.shape[0]
-    return {"loss": total_loss / total, "accuracy": correct / total}
+        y_true.append(y.cpu().numpy())
+        y_pred.append(preds.cpu().numpy())
+    return {
+        "loss": total_loss / total,
+        "accuracy": correct / total,
+        "y_true": np.concatenate(y_true) if y_true else np.array([], dtype=np.int64),
+        "y_pred": np.concatenate(y_pred) if y_pred else np.array([], dtype=np.int64),
+    }
 
 
 @torch.no_grad()

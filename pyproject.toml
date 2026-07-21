@@ -47,25 +47,19 @@ serverapp = "ssfl.server_app:app"
 clientapp = "ssfl.client_app:app"
 
 [tool.flwr.app.config]
+# `profile` plus a small allowlist of knobs genuinely meant to be picked per invocation
+# (algorithm/scenario/device). Every other field comes from configs/<profile>.yaml via
+# experiment_config_from_run_config, which layers that YAML underneath context.run_config.
+# Flower populates run_config from this ENTIRE table on every run -- including keys never
+# passed on the CLI -- so anything added here always clobbers that field in every profile
+# YAML unless the CLI also happens to pass a matching value. Do not add profile-defining
+# fields (num-server-rounds, local-epochs, batch-size, run-kind, ...) here: express a new
+# combination as a new configs/<name>.yaml instead. Flower also refuses to accept a
+# --run-config override for any key not already declared in this table.
 profile = "paper"
-run-kind = "paper"
 algorithm = "ssfl"
-backbone = "cnn"
 scenario = 1
-seed = 2023
-num-server-rounds = 200
-local-epochs = 5
-batch-size = 80
-paper-text-batch = false
-learning-rate = 1.0e-4
 device = "auto"
-deterministic = true
-ssfl-threshold-policy = "median"
-ssfl-discriminator-mode = "enabled"
-ssfl-voting-mode = "enabled"
-ssfl-label-representation = "hard"
-dsfl-temperature = 0.1
-checkpoint-interval = 10
 
 
 #######################################################################

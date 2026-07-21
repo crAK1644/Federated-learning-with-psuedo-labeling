@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ssfl.config import DataPrepConfig, NormalizationMode
+from ssfl.config import DataPrepConfig
 from ssfl.data.discovery import (
     DataDiscoveryError,
     discover_source_files,

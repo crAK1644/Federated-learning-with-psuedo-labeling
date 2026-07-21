@@ -2,15 +2,17 @@ import dataclasses
 import math
 
 import numpy as np
+import pytest
 import torch
 
-from ssfl.config import Algorithm, Backbone, ThresholdPolicy
+from ssfl.config import Algorithm, Backbone, DiscriminatorMode, LabelRepresentation, ThresholdPolicy
 from ssfl.data.datasets import TensorFeatureDataset
 from ssfl.models import build_classifier, build_discriminator
 from ssfl.protocols.message import Envelope
 from ssfl.protocols.ssfl import (
     ABSTAIN,
     ProposalResult,
+    aggregate_soft,
     aggregate_votes,
     client_distillation_step,
     client_proposal_step,
@@ -61,6 +63,7 @@ def test_proposal_result_carries_no_private_state() -> None:
         "threshold",
         "classifier_loss",
         "discriminator_loss",
+        "soft_probs",
     }
     instance = ProposalResult("c0", np.zeros(1), np.zeros(1, np.float32), 0.5, 0.0, 0.0)
     for value in dataclasses.asdict(instance).values():
@@ -96,6 +99,94 @@ def test_client_proposal_step_end_to_end() -> None:
     # every field is a plain scalar/array -- never a tensor requiring grad or a module
     assert isinstance(result.pseudo_labels, np.ndarray)
     assert isinstance(result.confidences, np.ndarray)
+
+
+def test_client_proposal_step_discriminator_disabled_all_familiar() -> None:
+    """no-discriminator ablation: every open example treated as familiar (no ABSTAIN)."""
+    classifier = build_classifier(Backbone.cnn)
+    discriminator = build_discriminator(Backbone.cnn)
+    result = client_proposal_step(
+        client_id="c0",
+        classifier=classifier,
+        discriminator=discriminator,
+        private_dataset=_dataset(32, seed=1, labeled=True),
+        open_dataset=_dataset(16, seed=2, labeled=False),
+        device=DEVICE,
+        epochs=1,
+        lr=1e-3,
+        batch_size=8,
+        threshold_policy=ThresholdPolicy.median,
+        seed=0,
+        discriminator_mode=DiscriminatorMode.disabled,
+    )
+    assert result.discriminator_loss is None
+    assert not np.any(result.pseudo_labels == ABSTAIN)
+
+
+def test_client_proposal_step_simple_filter_no_discriminator_model() -> None:
+    """simple-filtering ablation: confidence>=threshold decides familiarity, no discriminator training."""
+    classifier = build_classifier(Backbone.cnn)
+    discriminator = build_discriminator(Backbone.cnn)
+    result = client_proposal_step(
+        client_id="c0",
+        classifier=classifier,
+        discriminator=discriminator,
+        private_dataset=_dataset(32, seed=1, labeled=True),
+        open_dataset=_dataset(16, seed=2, labeled=False),
+        device=DEVICE,
+        epochs=1,
+        lr=1e-3,
+        batch_size=8,
+        threshold_policy=ThresholdPolicy.median,
+        seed=0,
+        discriminator_mode=DiscriminatorMode.simple_filter,
+    )
+    assert result.discriminator_loss is None
+    # median threshold -> exactly half familiar (ties broken by >=)
+    assert (result.pseudo_labels != ABSTAIN).sum() >= 1
+
+
+def test_client_proposal_step_soft_label_representation() -> None:
+    """no-voting ablation: soft masked probability rows, rounded, unfamiliar rows all-zero."""
+    classifier = build_classifier(Backbone.cnn)
+    discriminator = build_discriminator(Backbone.cnn)
+    result = client_proposal_step(
+        client_id="c0",
+        classifier=classifier,
+        discriminator=discriminator,
+        private_dataset=_dataset(32, seed=1, labeled=True),
+        open_dataset=_dataset(16, seed=2, labeled=False),
+        device=DEVICE,
+        epochs=1,
+        lr=1e-3,
+        batch_size=8,
+        threshold_policy=ThresholdPolicy.median,
+        seed=0,
+        label_representation=LabelRepresentation.soft,
+        soft_round_decimals=4,
+    )
+    assert result.pseudo_labels is None
+    assert result.soft_probs.shape == (16, 11)
+    row_sums = result.soft_probs.sum(axis=1)
+    for value in row_sums:
+        assert value == pytest.approx(0.0, abs=1e-6) or value == pytest.approx(1.0, abs=1e-3)
+
+
+def test_aggregate_soft_means_and_argmaxes() -> None:
+    num_classes = 3
+    probs_a = np.array([[0.7, 0.2, 0.1], [0.0, 0.0, 0.0]], dtype=np.float32)  # 2nd row unfamiliar
+    probs_b = np.array([[0.5, 0.3, 0.2], [0.0, 0.0, 0.0]], dtype=np.float32)  # both unfamiliar on row 2
+    client_a = ProposalResult("a", None, np.zeros(2, np.float32), 0.5, 0.0, None, soft_probs=probs_a)
+    client_b = ProposalResult("b", None, np.zeros(2, np.float32), 0.5, 0.0, None, soft_probs=probs_b)
+    proposals = [(_envelope("a"), client_a), (_envelope("b"), client_b)]
+
+    result = aggregate_soft(proposals, num_open=2, num_classes=num_classes)
+
+    assert result.global_labels[0] == 0  # mean([.7,.2,.1],[.5,.3,.2]) argmax -> class 0
+    assert result.valid_mask[0]
+    assert result.global_labels[1] == ABSTAIN  # all clients found it unfamiliar
+    assert not result.valid_mask[1]
+    assert result.all_abstain_count == 1
 
 
 def test_aggregate_votes_majority_tie_and_all_abstain() -> None:
