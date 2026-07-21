@@ -313,6 +313,25 @@ def load_experiment_config(
     return ExperimentConfig.model_validate(base)
 
 
+def experiment_config_from_run_config(run_config: dict[str, Any]) -> ExperimentConfig:
+    """Build an :class:`ExperimentConfig` from a Flower ``Context.run_config`` dict (the
+    hyphenated flat mapping ``ClientApp``/``ServerApp`` receive at runtime).
+
+    Layers the ``configs/<profile>.yaml`` matching ``run_config``'s ``profile`` key (default
+    ``paper``) underneath the flat overrides -- the same merge ``load_experiment_config`` does for
+    the CLI path -- so profile-only fields like ``checkpoint_rounds`` stay consistent with
+    ``num_server_rounds`` without needing to be repeated in every ``--run-config`` string. Falls
+    back to validating the overrides alone if the profile file isn't found (e.g. a custom profile
+    name meant to be fully specified via overrides).
+    """
+    overrides = {_normalize_key(k): v for k, v in run_config.items()}
+    profile = overrides.get("profile", "paper")
+    profile_path = Path(__file__).resolve().parent.parent.parent / "configs" / f"{profile}.yaml"
+    if profile_path.exists():
+        return load_experiment_config(profile_path, overrides)
+    return ExperimentConfig.model_validate(overrides)
+
+
 def load_data_prep_config(overrides: dict[str, Any]) -> DataPrepConfig:
     return DataPrepConfig.model_validate(overrides)
 

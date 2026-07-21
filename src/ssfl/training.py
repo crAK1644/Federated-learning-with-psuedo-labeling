@@ -98,7 +98,7 @@ def train_supervised(
     )
 
 
-def _teacher_distribution_loss(logits: torch.Tensor, target_probs: torch.Tensor) -> torch.Tensor:
+def teacher_distribution_loss(logits: torch.Tensor, target_probs: torch.Tensor) -> torch.Tensor:
     return -(target_probs * torch.log_softmax(logits, dim=-1)).sum(dim=-1).mean()
 
 
@@ -114,7 +114,7 @@ def train_distillation(
     """Soft-target teacher-distribution loss (loader yields ``(x, prob_distribution)``) -- used
     for FD/DS-FL distillation and SSFL's soft-label ablation."""
     return _run_epochs(
-        model, loader, device, epochs, lr, _teacher_distribution_loss, grad_clip_norm, use_amp
+        model, loader, device, epochs, lr, teacher_distribution_loss, grad_clip_norm, use_amp
     )
 
 
