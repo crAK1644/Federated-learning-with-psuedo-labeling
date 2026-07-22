@@ -17,6 +17,7 @@ from flwr.serverapp.strategy.strategy_utils import aggregate_metricrecords, samp
 from ssfl.config import Algorithm, VotingMode
 from ssfl.models import NUM_CLASSES
 from ssfl.protocols.message import Envelope, ExpectedContext, ProtocolError, validate_envelope
+from ssfl.protocols.payload_limits import validate_ssfl_proposal_arrays
 from ssfl.protocols.ssfl import ProposalResult, aggregate_soft, aggregate_votes
 from ssfl.records import array_record_from_numpy, numpy_from_array_record
 
@@ -68,6 +69,7 @@ class SSFLStrategy(Strategy):
         )
         seen_message_ids: set[str] = set()
         proposals: list[tuple[Envelope, ProposalResult]] = []
+        replies = list(replies)
         for msg in replies:
             if msg.has_error():
                 continue
@@ -87,6 +89,10 @@ class SSFLStrategy(Strategy):
             seen_message_ids.add(envelope.message_id)
 
             arrays = numpy_from_array_record(msg.content["arrays"])
+            try:
+                validate_ssfl_proposal_arrays(arrays, num_open=self.num_open, num_classes=NUM_CLASSES)
+            except ProtocolError:
+                continue
             metrics = msg.content["metrics"]
             proposals.append(
                 (
@@ -103,6 +109,7 @@ class SSFLStrategy(Strategy):
                 )
             )
 
+        rejected_count = len(replies) - len(proposals)
         if not proposals:
             return None, None
 
@@ -119,6 +126,7 @@ class SSFLStrategy(Strategy):
                 "tie_count": result.tie_count,
                 "all_abstain_count": result.all_abstain_count,
                 "num_proposals": len(proposals),
+                "rejected_count": rejected_count,
             }
         )
         return arrays_out, metrics_out
@@ -131,7 +139,10 @@ class SSFLStrategy(Strategy):
         return [Message(record, message_type=MessageType.EVALUATE, dst_node_id=n) for n in self._current_node_ids]
 
     def aggregate_evaluate(self, server_round: int, replies: Iterable[Message]):
-        contents = [msg.content for msg in replies if not msg.has_error()]
+        valid_senders = frozenset(str(n) for n in self._current_node_ids)
+        contents = [
+            msg.content for msg in replies if not msg.has_error() and str(msg.metadata.src_node_id) in valid_senders
+        ]
         if not contents:
             return None
         return aggregate_metricrecords(contents, "num-examples")

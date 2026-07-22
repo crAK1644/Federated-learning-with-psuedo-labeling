@@ -28,10 +28,17 @@ def client_predict_step(
 
 def aggregate_mean(uploads: list[SoftPredictionUpload]) -> np.ndarray:
     """Arithmetic mean across (deduped-by-client) uploads -- idempotent against a duplicated
-    submission from the same client."""
+    submission from the same client.
+
+    Stacked in ``client_id``-sorted order, not upload/arrival order: ``.mean(axis=0)`` sums in
+    array order, floating-point addition isn't associative, and Ray/Flower reply arrival order
+    isn't guaranteed reproducible across runs of the same seeded simulation -- arrival-order
+    stacking made this mean (and, after ``sharpen``'s ``1/T=10`` power, the resulting hard
+    training targets) differ between two otherwise-identical runs. Found via a failing
+    ``test_identical_seed_runs_are_deterministic``."""
     seen: set[str] = set()
     deduped: list[SoftPredictionUpload] = []
-    for u in uploads:
+    for u in sorted(uploads, key=lambda u: u.client_id):
         if u.client_id in seen:
             continue
         seen.add(u.client_id)

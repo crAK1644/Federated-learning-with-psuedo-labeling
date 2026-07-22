@@ -18,10 +18,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 from flwr.common import Message, RecordDict
 from flwr.common.serde import recorddict_to_proto
 from flwr.serverapp.strategy import Strategy
+
+from ssfl.logging_utils import log_event
 
 
 @dataclass(frozen=True)
@@ -100,16 +103,31 @@ class CommsLedger:
 
 class CommsTrackingStrategy(Strategy):
     """Delegates aggregation behavior to ``inner`` unchanged; only observes the ``Message``
-    lists flowing through the four exchange points to populate ``self.ledger``."""
+    lists flowing through the four exchange points to populate ``self.ledger`` and, if ``logger``
+    is given, to emit one structured ``events.jsonl`` line per round/phase (M9 "Logging"/"Metrics":
+    round, phase, reply count, and every numeric scalar the inner strategy's aggregation returned --
+    e.g. SSFL/FD/DS-FL's ``rejected_count``, SSFL's ``valid_rate``/``tie_count``. Never touches
+    ``arrays_out``, so model weights/pseudo-labels can never end up in the log by construction)."""
 
-    def __init__(self, inner: Strategy, algorithm: str, scenario: int) -> None:
+    def __init__(self, inner: Strategy, algorithm: str, scenario: int, logger: Any = None) -> None:
         self.inner = inner
         self.algorithm = algorithm
         self.scenario = scenario
         self.ledger = CommsLedger()
+        self.logger = logger
 
     def summary(self) -> None:
         self.inner.summary()
+
+    def _log_round(self, server_round: int, phase: str, num_replies: int, metrics_out: Any) -> None:
+        if self.logger is None:
+            return
+        fields: dict[str, Any] = {"round": server_round, "phase": phase, "num_replies": num_replies}
+        if metrics_out is not None:
+            for key, value in metrics_out.items():
+                if isinstance(value, (int, float, bool)):
+                    fields[key] = value
+        log_event(self.logger, "aggregate", **fields)
 
     def configure_train(self, server_round, arrays, config, grid) -> list[Message]:
         messages = list(self.inner.configure_train(server_round, arrays, config, grid))
@@ -123,7 +141,9 @@ class CommsTrackingStrategy(Strategy):
         self.ledger.record_messages(
             replies, self.algorithm, self.scenario, server_round, "train", "client_to_server"
         )
-        return self.inner.aggregate_train(server_round, replies)
+        arrays_out, metrics_out = self.inner.aggregate_train(server_round, replies)
+        self._log_round(server_round, "train", len(replies), metrics_out)
+        return arrays_out, metrics_out
 
     def configure_evaluate(self, server_round, arrays, config, grid) -> list[Message]:
         messages = list(self.inner.configure_evaluate(server_round, arrays, config, grid))
@@ -137,7 +157,9 @@ class CommsTrackingStrategy(Strategy):
         self.ledger.record_messages(
             replies, self.algorithm, self.scenario, server_round, "evaluate", "client_to_server"
         )
-        return self.inner.aggregate_evaluate(server_round, replies)
+        metrics_out = self.inner.aggregate_evaluate(server_round, replies)
+        self._log_round(server_round, "evaluate", len(replies), metrics_out)
+        return metrics_out
 
 
 if __name__ == "__main__":

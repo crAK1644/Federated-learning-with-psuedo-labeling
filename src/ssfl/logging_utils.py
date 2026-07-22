@@ -96,4 +96,30 @@ def bind(logger: logging.Logger, **fields: Any) -> logging.LoggerAdapter:
 
 def log_event(logger: logging.LoggerAdapter | logging.Logger, message: str, **fields: Any) -> None:
     _check_forbidden(fields)
-    logger.info(message, extra={"fields": fields} if not isinstance(logger, logging.LoggerAdapter) else {"fields": fields})
+    if isinstance(logger, logging.LoggerAdapter):
+        # _Adapter.process() looks for a top-level "fields" kwarg to merge with the bound
+        # fields and re-wrap into "extra" itself -- passing extra= here directly would bypass
+        # that merge (process() pops "fields", not "extra") and silently drop every per-call field.
+        logger.info(message, fields=fields)
+    else:
+        logger.info(message, extra={"fields": fields})
+
+
+if __name__ == "__main__":
+    import io
+
+    stream = io.StringIO()
+    logger = bind(configure_logging(stream=stream), run_id="r1", algorithm="ssfl")
+    log_event(logger, "aggregate", round=2, phase="train", valid_rate=0.9)
+    line = json.loads(stream.getvalue().strip().splitlines()[-1])
+    assert line["run_id"] == "r1" and line["algorithm"] == "ssfl", line
+    assert line["round"] == 2 and line["phase"] == "train" and line["valid_rate"] == 0.9, line
+
+    try:
+        log_event(logger, "leak", weights=[1, 2, 3])
+    except ForbiddenLogFieldError:
+        pass
+    else:
+        raise AssertionError("expected ForbiddenLogFieldError for a 'weights' field")
+
+    print("logging_utils.py self-check OK")

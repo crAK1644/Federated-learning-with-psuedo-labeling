@@ -15,7 +15,10 @@ from flwr.serverapp import Grid
 from flwr.serverapp.strategy import Strategy
 from flwr.serverapp.strategy.strategy_utils import aggregate_metricrecords, sample_nodes
 
+from ssfl.models import NUM_CLASSES
 from ssfl.protocols.fd import ClassLogitUpload, FDAggregation, aggregate_class_logits, leave_self_out_targets
+from ssfl.protocols.message import ProtocolError
+from ssfl.protocols.payload_limits import validate_fd_arrays
 from ssfl.records import array_record_from_numpy, numpy_from_array_record
 
 
@@ -42,13 +45,21 @@ class FDStrategy(Strategy):
         return [Message(record, message_type=MessageType.TRAIN, dst_node_id=n) for n in node_ids]
 
     def aggregate_train(self, server_round: int, replies: Iterable[Message]):
+        valid_senders = frozenset(str(n) for n in self._current_node_ids)
+        replies = list(replies)
         uploads: list[ClassLogitUpload] = []
         contents = []
         for msg in replies:
             if msg.has_error():
                 continue
             sender_id = str(msg.metadata.src_node_id)
+            if sender_id not in valid_senders:
+                continue
             arrays = numpy_from_array_record(msg.content["arrays"])
+            try:
+                validate_fd_arrays(arrays, num_classes=NUM_CLASSES)
+            except ProtocolError:
+                continue
             uploads.append(
                 ClassLogitUpload(
                     client_id=sender_id,
@@ -71,6 +82,7 @@ class FDStrategy(Strategy):
             {"global_sum": aggregation.global_sum, "contributor_counts": aggregation.contributor_counts}
         )
         metrics_out = aggregate_metricrecords(contents, "num-examples")
+        metrics_out["rejected_count"] = len(replies) - len(uploads)
         return arrays_out, metrics_out
 
     def configure_evaluate(
@@ -90,7 +102,10 @@ class FDStrategy(Strategy):
         return messages
 
     def aggregate_evaluate(self, server_round: int, replies: Iterable[Message]):
-        contents = [msg.content for msg in replies if not msg.has_error()]
+        valid_senders = frozenset(str(n) for n in self._current_node_ids)
+        contents = [
+            msg.content for msg in replies if not msg.has_error() and str(msg.metadata.src_node_id) in valid_senders
+        ]
         if not contents:
             return None
         return aggregate_metricrecords(contents, "num-examples")

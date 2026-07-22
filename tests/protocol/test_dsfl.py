@@ -34,6 +34,21 @@ def test_aggregate_mean_idempotent_under_duplicate_client() -> None:
     assert np.allclose(once, duplicated)
 
 
+def test_aggregate_mean_bit_identical_regardless_of_upload_order() -> None:
+    """Ray/Flower reply-arrival order isn't reproducible run-to-run; aggregate_mean must sort by
+    client_id internally so two runs with the same clients (in any arrival order) produce the
+    exact same bytes -- not just approximately close (this was a real determinism bug, found by a
+    live two-run integration test: T=0.1 sharpening amplifies tiny arrival-order-dependent
+    floating-point summation differences into materially different training targets)."""
+    rng = np.random.default_rng(0)
+    uploads = [SoftPredictionUpload(str(i), rng.random((3, 11), dtype=np.float32)) for i in range(10)]
+    forward = aggregate_mean(uploads)
+    backward = aggregate_mean(list(reversed(uploads)))
+    shuffled = aggregate_mean([uploads[i] for i in rng.permutation(len(uploads))])
+    assert np.array_equal(forward, backward)
+    assert np.array_equal(forward, shuffled)
+
+
 def test_sharpen_rows_sum_to_one() -> None:
     probs = np.array([[0.9, 0.1], [0.5, 0.5]], dtype=np.float32)
     sharpened = sharpen(probs, temperature=0.1)

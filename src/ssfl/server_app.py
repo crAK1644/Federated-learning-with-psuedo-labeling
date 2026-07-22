@@ -20,6 +20,7 @@ from ssfl.comms import CommsTrackingStrategy
 from ssfl.config import Algorithm, experiment_config_from_run_config
 from ssfl.data.datasets import load_open_data, load_test_data
 from ssfl.device import resolve_device
+from ssfl.logging_utils import bind, configure_logging, log_event
 from ssfl.metrics import MetricsLedger, compute_classification_metrics
 from ssfl.models import NUM_CLASSES, build_classifier
 from ssfl.protocols import dsfl as dsfl_protocol
@@ -48,6 +49,15 @@ def main(grid: Grid, context: Context) -> None:
 
     run_context = RunContext.create(exp_config, dataset_manifest_path=manifest_path)
     metrics_ledger = MetricsLedger()
+
+    events_stream = open(run_context.events_path, "a", buffering=1)
+    events_logger = bind(
+        configure_logging(stream=events_stream),
+        run_id=run_context.run_id,
+        algorithm=exp_config.algorithm.value,
+        scenario=exp_config.scenario.value,
+    )
+    log_event(events_logger, "run_start", dataset_hash=manifest_hash)
 
     train_config = ConfigRecord()
     evaluate_config = ConfigRecord()
@@ -151,7 +161,11 @@ def main(grid: Grid, context: Context) -> None:
     elif exp_config.algorithm is Algorithm.dsfl:
         open_dataset = load_open_data(exp_config.data_path, exp_config.backbone)
         test_dataset = load_test_data(exp_config.data_path, exp_config.backbone)
-        strategy = DSFLStrategy(temperature=exp_config.dsfl_temperature, num_clients=exp_config.num_clients())
+        strategy = DSFLStrategy(
+            temperature=exp_config.dsfl_temperature,
+            num_clients=exp_config.num_clients(),
+            num_open=len(open_dataset),
+        )
         initial_arrays = ArrayRecord()
         seed_everything(exp_config.seed)
         server_classifier = build_classifier(exp_config.backbone)
@@ -191,7 +205,9 @@ def main(grid: Grid, context: Context) -> None:
     else:
         raise ValueError(f"unknown algorithm {exp_config.algorithm}")
 
-    tracked_strategy = CommsTrackingStrategy(strategy, exp_config.algorithm.value, exp_config.scenario.value)
+    tracked_strategy = CommsTrackingStrategy(
+        strategy, exp_config.algorithm.value, exp_config.scenario.value, logger=events_logger
+    )
     result = tracked_strategy.start(
         grid,
         initial_arrays,
@@ -216,3 +232,5 @@ def main(grid: Grid, context: Context) -> None:
             ),
         }
     )
+    log_event(events_logger, "run_end", final_round=final_round)
+    events_stream.close()

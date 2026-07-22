@@ -35,6 +35,12 @@ packages = ["src/ssfl"]
 line-length = 100
 target-version = "py312"
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: runs a real flwr simulation or subprocess (minutes, not seconds) -- excluded by default",
+]
+addopts = "-m 'not slow'"
+
 # Flower app manifest. serverapp/clientapp targets are built in M5 (Flower runtime integration);
 # the manifest is declared now so `flwr run .` becomes usable the moment those modules land,
 # without a second round of pyproject.toml surgery. Config keys mirror ExperimentConfig field

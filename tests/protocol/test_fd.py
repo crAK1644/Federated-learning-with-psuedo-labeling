@@ -59,6 +59,24 @@ def test_aggregate_class_logits_idempotent_under_duplicate_client() -> None:
     assert np.array_equal(once.contributor_counts, duplicated.contributor_counts)
 
 
+def test_aggregate_class_logits_bit_identical_regardless_of_upload_order() -> None:
+    """Same determinism requirement as aggregate_mean (DS-FL): Ray/Flower reply order isn't
+    reproducible run-to-run, so summing class_probs in upload order made global_sum -- and
+    everything downstream (leave-self-out targets, distillation) -- non-deterministic. Fixed by
+    sorting on client_id before summing."""
+    rng = np.random.default_rng(1)
+    uploads = [
+        _upload(str(i), {c: rng.random(NUM_CLASSES, dtype=np.float32) for c in range(NUM_CLASSES)})
+        for i in range(10)
+    ]
+    forward = aggregate_class_logits(uploads)
+    backward = aggregate_class_logits(list(reversed(uploads)))
+    shuffled = aggregate_class_logits([uploads[i] for i in rng.permutation(len(uploads))])
+    assert np.array_equal(forward.global_sum, backward.global_sum)
+    assert np.array_equal(forward.global_sum, shuffled.global_sum)
+    assert np.array_equal(forward.contributor_counts, shuffled.contributor_counts)
+
+
 def test_leave_self_out_targets_multi_contributor() -> None:
     vec0_a = np.eye(NUM_CLASSES, dtype=np.float32)[0]
     vec0_b = np.eye(NUM_CLASSES, dtype=np.float32)[1]

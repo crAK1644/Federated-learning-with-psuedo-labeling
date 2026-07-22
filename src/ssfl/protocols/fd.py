@@ -50,10 +50,14 @@ class FDAggregation:
 
 
 def aggregate_class_logits(uploads: list[ClassLogitUpload]) -> FDAggregation:
-    """Idempotent: a duplicate ``client_id`` is deduped before summing."""
+    """Idempotent: a duplicate ``client_id`` is deduped before summing.
+
+    Summed in ``client_id``-sorted order, not upload/arrival order: floating-point addition isn't
+    associative and Ray/Flower reply arrival order isn't guaranteed reproducible across runs of the
+    same seeded simulation, so summing in arrival order would make results non-deterministic."""
     seen: set[str] = set()
     deduped: list[ClassLogitUpload] = []
-    for u in uploads:
+    for u in sorted(uploads, key=lambda u: u.client_id):
         if u.client_id in seen:
             continue
         seen.add(u.client_id)

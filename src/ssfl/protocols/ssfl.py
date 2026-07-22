@@ -191,12 +191,17 @@ def aggregate_soft(
     vectors (an all-zero row = that client found the example unfamiliar) across clients per open
     index, then argmax -> hard global label. Same idempotent-under-duplicate-sender behavior as
     ``aggregate_votes``. ``votes_per_class`` doesn't apply to a soft mean, so it's left zeroed
-    rather than repurposed to hold something misleading."""
+    rather than repurposed to hold something misleading.
+
+    Summed in ``sender_id``-sorted order rather than reply-arrival order: floating-point addition
+    is not associative, and Ray/Flower reply arrival order is not guaranteed reproducible across
+    runs of the same simulation, so an arrival-order sum would make this ablation's results
+    non-deterministic across otherwise-identical seeded runs."""
     seen_senders: set[str] = set()
     sum_probs = np.zeros((num_open, num_classes), dtype=np.float64)
     counts = np.zeros(num_open, dtype=np.int64)
     rejected: list[tuple[str, str]] = []
-    for envelope, result in proposals:
+    for envelope, result in sorted(proposals, key=lambda p: p[0].sender_id):
         if envelope.sender_id in seen_senders:
             rejected.append((envelope.sender_id, "duplicate sender in aggregation batch"))
             continue

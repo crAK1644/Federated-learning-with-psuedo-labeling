@@ -189,6 +189,24 @@ def test_aggregate_soft_means_and_argmaxes() -> None:
     assert result.all_abstain_count == 1
 
 
+def test_aggregate_soft_bit_identical_regardless_of_proposal_order() -> None:
+    """Same determinism requirement as DS-FL's aggregate_mean / FD's aggregate_class_logits: Ray/
+    Flower reply order isn't reproducible run-to-run, so summing soft_probs in reply order made
+    the no-voting ablation's global_labels non-deterministic across identically-seeded runs. Fixed
+    by sorting on sender_id before summing."""
+    rng = np.random.default_rng(2)
+    num_open, num_classes = 5, 4
+    proposals = [
+        (_envelope(str(i)), ProposalResult(str(i), None, np.zeros(num_open, np.float32), 0.5, 0.0, None, soft_probs=rng.random((num_open, num_classes), dtype=np.float32)))
+        for i in range(10)
+    ]
+    forward = aggregate_soft(proposals, num_open=num_open, num_classes=num_classes)
+    backward = aggregate_soft(list(reversed(proposals)), num_open=num_open, num_classes=num_classes)
+    shuffled = aggregate_soft([proposals[i] for i in rng.permutation(len(proposals))], num_open=num_open, num_classes=num_classes)
+    assert np.array_equal(forward.global_labels, backward.global_labels)
+    assert np.array_equal(forward.global_labels, shuffled.global_labels)
+
+
 def test_aggregate_votes_majority_tie_and_all_abstain() -> None:
     client_a = ProposalResult("a", np.array([0, 0, ABSTAIN]), np.zeros(3, np.float32), 0.5, 0.0, 0.0)
     client_b = ProposalResult("b", np.array([0, 1, ABSTAIN]), np.zeros(3, np.float32), 0.5, 0.0, 0.0)
