@@ -27,7 +27,7 @@ from ssfl.protocols import dsfl as dsfl_protocol
 from ssfl.protocols import fl as fl_protocol
 from ssfl.protocols.ssfl import AggregationResult, server_distillation_step
 from ssfl.records import array_record_from_numpy, numpy_from_array_record
-from ssfl.run_context import RunContext
+from ssfl.run_context import RunContext, prune_superseded_checkpoints
 from ssfl.seeding import configure_determinism, seed_everything
 from ssfl.strategies.dsfl import DSFLStrategy
 from ssfl.strategies.fd import FDStrategy
@@ -337,6 +337,19 @@ def main(grid: Grid, context: Context) -> None:
             extra={"attempt_id": run_context.attempt_id},
         )
         telemetry.emit("checkpoint_written", round=server_round, path=str(checkpoint_path))
+        pruned_paths = prune_superseded_checkpoints(
+            run_context.checkpoints_dir,
+            current_round=server_round,
+            pinned_rounds=exp_config.checkpoint_rounds,
+        )
+        if pruned_paths:
+            telemetry.emit(
+                "checkpoints_pruned",
+                round=server_round,
+                count=len(pruned_paths),
+                paths=[str(path) for path in pruned_paths],
+                retention="milestones_plus_latest",
+            )
 
     tracked_strategy = CommsTrackingStrategy(
         strategy,

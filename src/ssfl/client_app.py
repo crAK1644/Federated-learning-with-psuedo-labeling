@@ -41,6 +41,7 @@ from ssfl.protocols.fd import client_distillation_step as fd_client_distillation
 from ssfl.protocols.fl import client_train_step
 from ssfl.protocols.ssfl import AggregationResult, client_distillation_step, client_proposal_step
 from ssfl.records import array_record_from_numpy, numpy_from_array_record
+from ssfl.run_context import prune_superseded_checkpoints
 from ssfl.seeding import seed_everything
 from ssfl.telemetry import JsonlEventWriter, gpu_snapshot
 
@@ -157,22 +158,27 @@ def _save_client_checkpoint(
     exp_config: ExperimentConfig,
     client_id: str,
     server_round: int,
-) -> Path | None:
+) -> tuple[Path | None, list[Path]]:
     if not _checkpoint_due(exp_config, server_round):
-        return None
+        return None, []
     models = {
         key: context.state[key].to_torch_state_dict()
         for key in ("classifier", "discriminator")
         if key in context.state
     }
     if not models:
-        return None
+        return None, []
     path = _client_checkpoint_path(message, client_id, server_round)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".pt.tmp")
     torch.save({"round": server_round, "client_id": client_id, "models": models}, tmp)
     tmp.replace(path)
-    return path
+    pruned_paths = prune_superseded_checkpoints(
+        path.parent,
+        current_round=server_round,
+        pinned_rounds=exp_config.checkpoint_rounds,
+    )
+    return path, pruned_paths
 
 
 # ---------------------------------------------------------------------------
@@ -619,13 +625,18 @@ def client_evaluate(message: Message, context: Context) -> Message:
         )
     else:
         raise ValueError(f"unknown algorithm {exp_config.algorithm}")
-    checkpoint_path = _save_client_checkpoint(context, message, exp_config, client_id, server_round)
+    checkpoint_path, pruned_checkpoint_paths = _save_client_checkpoint(
+        context, message, exp_config, client_id, server_round
+    )
     writer.emit(
         "client_phase_end",
         round=server_round,
         phase="evaluate",
         duration_seconds=time.perf_counter() - started,
         checkpoint_path=str(checkpoint_path) if checkpoint_path else None,
+        pruned_checkpoint_count=len(pruned_checkpoint_paths),
+        pruned_checkpoint_paths=[str(path) for path in pruned_checkpoint_paths],
+        checkpoint_retention="milestones_plus_latest",
         **gpu_snapshot(),
     )
     return reply

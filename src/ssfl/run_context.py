@@ -46,6 +46,28 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
     _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True, default=str))
 
 
+def prune_superseded_checkpoints(
+    checkpoint_dir: Path, current_round: int, pinned_rounds: tuple[int, ...]
+) -> list[Path]:
+    """Keep milestone checkpoints plus the latest resumable checkpoint.
+
+    Per-round training telemetry remains untouched; only older non-milestone model snapshots are
+    removed after their replacement is safely written.
+    """
+    keep = {int(round_number) for round_number in pinned_rounds}
+    keep.add(int(current_round))
+    pruned: list[Path] = []
+    for path in sorted(checkpoint_dir.glob("round_*.pt")):
+        try:
+            round_number = int(path.stem.split("_")[1])
+        except (IndexError, ValueError):
+            continue
+        if round_number not in keep:
+            path.unlink()
+            pruned.append(path)
+    return pruned
+
+
 @dataclass
 class RunContext:
     run_id: str

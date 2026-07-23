@@ -5,7 +5,7 @@ import torch
 from ssfl.config import DeviceKind, capture_environment_snapshot, load_experiment_config
 from ssfl.device import resolve_device
 from ssfl.logging_utils import ForbiddenLogFieldError, bind, configure_logging
-from ssfl.run_context import RunContext
+from ssfl.run_context import RunContext, prune_superseded_checkpoints
 from ssfl.seeding import configure_determinism, make_generator, seed_everything
 
 import pytest
@@ -91,3 +91,25 @@ def test_run_context_deterministic_run_id(tmp_path) -> None:
     ctx_a = RunContext.create(cfg_a)
     ctx_b = RunContext.create(cfg_b)
     assert ctx_a.run_id == ctx_b.run_id  # same config/seed -> same run id regardless of output path
+
+
+def test_checkpoint_retention_keeps_milestones_and_latest(tmp_path) -> None:
+    for round_number in range(1, 7):
+        (tmp_path / f"round_{round_number}.pt").write_bytes(b"checkpoint")
+
+    pruned = prune_superseded_checkpoints(
+        tmp_path,
+        current_round=6,
+        pinned_rounds=(2, 5, 10),
+    )
+
+    assert {path.name for path in pruned} == {
+        "round_1.pt",
+        "round_3.pt",
+        "round_4.pt",
+    }
+    assert {path.name for path in tmp_path.glob("round_*.pt")} == {
+        "round_2.pt",
+        "round_5.pt",
+        "round_6.pt",
+    }
