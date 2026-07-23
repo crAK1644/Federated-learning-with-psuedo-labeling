@@ -1,4 +1,4 @@
-data/
+/data/
 artifacts/
 *.pdf
 .DS_Store
