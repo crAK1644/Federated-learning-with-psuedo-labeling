@@ -201,7 +201,7 @@ class ExperimentConfig(BaseModel):
     checkpoint_interval: int = 10
     checkpoint_rounds: tuple[int, ...] = (10, 50, 100, 150, 200)
     logging_interval: int = 1
-    log_every_batch: bool = True
+    log_every_batch: bool = False
     system_monitor_interval_seconds: float = 1.0
     resume_from: Path | None = None
 

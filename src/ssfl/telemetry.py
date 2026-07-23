@@ -22,6 +22,20 @@ import torch
 EventCallback = Callable[[str, dict[str, Any]], None]
 
 
+def filter_batch_events(
+    callback: EventCallback | None, *, log_every_batch: bool
+) -> EventCallback | None:
+    """Apply the configured batch-event policy without suppressing higher-level telemetry."""
+    if callback is None or log_every_batch:
+        return callback
+
+    def _filtered(event: str, fields: dict[str, Any]) -> None:
+        if not event.endswith("_batch"):
+            callback(event, fields)
+
+    return _filtered
+
+
 def gpu_snapshot() -> dict[str, Any]:
     """Process-local CUDA allocator state; empty on non-CUDA hosts."""
     if not torch.cuda.is_available():

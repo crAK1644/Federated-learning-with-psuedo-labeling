@@ -32,7 +32,7 @@ from ssfl.seeding import configure_determinism, seed_everything
 from ssfl.strategies.dsfl import DSFLStrategy
 from ssfl.strategies.fd import FDStrategy
 from ssfl.strategies.ssfl import SSFLStrategy
-from ssfl.telemetry import JsonlEventWriter, SystemMonitor, gpu_snapshot
+from ssfl.telemetry import JsonlEventWriter, SystemMonitor, filter_batch_events, gpu_snapshot
 
 app = ServerApp()
 
@@ -70,7 +70,10 @@ def main(grid: Grid, context: Context) -> None:
         scenario=exp_config.scenario.value,
         role="server",
     )
-    server_callback = telemetry.callback(phase="server")
+    server_callback = filter_batch_events(
+        telemetry.callback(phase="server"),
+        log_every_batch=exp_config.log_every_batch,
+    )
     monitor = SystemMonitor(telemetry, exp_config.system_monitor_interval_seconds)
     monitor.start()
 

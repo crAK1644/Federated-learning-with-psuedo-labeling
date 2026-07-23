@@ -43,7 +43,7 @@ from ssfl.protocols.ssfl import AggregationResult, client_distillation_step, cli
 from ssfl.records import array_record_from_numpy, numpy_from_array_record
 from ssfl.run_context import prune_superseded_checkpoints
 from ssfl.seeding import seed_everything
-from ssfl.telemetry import JsonlEventWriter, gpu_snapshot
+from ssfl.telemetry import JsonlEventWriter, filter_batch_events, gpu_snapshot
 
 app = ClientApp()
 
@@ -176,7 +176,7 @@ def _save_client_checkpoint(
     pruned_paths = prune_superseded_checkpoints(
         path.parent,
         current_round=server_round,
-        pinned_rounds=exp_config.checkpoint_rounds,
+        pinned_rounds=(),
     )
     return path, pruned_paths
 
@@ -548,7 +548,10 @@ def client_train(message: Message, context: Context) -> Message:
     restored_round = _restore_client_checkpoint(
         context, message, exp_config, client_id, server_round
     )
-    callback = writer.callback(round=server_round, phase="train")
+    callback = filter_batch_events(
+        writer.callback(round=server_round, phase="train"),
+        log_every_batch=exp_config.log_every_batch,
+    )
     started = time.perf_counter()
     writer.emit(
         "client_phase_start",
@@ -599,7 +602,10 @@ def client_evaluate(message: Message, context: Context) -> Message:
     client_id, assignment = _partition_client(context, exp_config)
     private = load_client_private_data(exp_config.data_path, assignment, exp_config.backbone)
     writer = _client_writer(message, client_id, exp_config)
-    callback = writer.callback(round=server_round, phase="evaluate")
+    callback = filter_batch_events(
+        writer.callback(round=server_round, phase="evaluate"),
+        log_every_batch=exp_config.log_every_batch,
+    )
     started = time.perf_counter()
     writer.emit(
         "client_phase_start",
@@ -636,7 +642,7 @@ def client_evaluate(message: Message, context: Context) -> Message:
         checkpoint_path=str(checkpoint_path) if checkpoint_path else None,
         pruned_checkpoint_count=len(pruned_checkpoint_paths),
         pruned_checkpoint_paths=[str(path) for path in pruned_checkpoint_paths],
-        checkpoint_retention="milestones_plus_latest",
+        checkpoint_retention="latest_only",
         **gpu_snapshot(),
     )
     return reply

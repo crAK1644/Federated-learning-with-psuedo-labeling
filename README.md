@@ -70,19 +70,21 @@ algorithm, scenario, device, and federation configuration.
 
 ## Exhaustive artifacts
 
-Every batch, epoch, client phase, aggregation phase, communication round, evaluation, checkpoint,
-and one-second GPU/system sample is flushed during the run. Each deterministic run directory has:
+Every epoch, client phase, aggregation phase, communication round, evaluation, checkpoint action,
+and one-second GPU/system sample is flushed during paper runs. Per-mini-batch events are disabled
+to keep the full matrix within practical storage limits; set `log_every_batch: true` only for a
+short diagnostic profile. Each deterministic run directory has:
 
 ```text
 metrics.parquet                 per-round macro/micro/weighted metrics
 per_class_metrics.parquet       per-class precision/recall/F1/support
 confusion_matrices.npz          raw confusion matrix per round
 communication.parquet          every message, tensor shape/dtype, real/wire/paper bytes
-checkpoints/                    server and per-client checkpoint per paper round
+checkpoints/                    server milestones/final and latest resumable per-client weights
 attempts/<attempt-id>/
   events.jsonl                  compact server aggregation stream
   telemetry/server.jsonl        rounds, phases, GPU/system, evaluation details
-  telemetry/clients/*.jsonl     every client batch/epoch/prediction/evaluation
+  telemetry/clients/*.jsonl     every client epoch/phase/prediction/evaluation summary
   aggregation_audit/*.npz       full SSFL vote counts, participation, labels, masks
 ```
 
