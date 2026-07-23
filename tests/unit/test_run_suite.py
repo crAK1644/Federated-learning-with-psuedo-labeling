@@ -72,6 +72,8 @@ def test_federation_config_allocates_gpu_fraction_and_concurrency(configs_dir) -
         }
     )
     rendered = _federation_config(config)
+    assert "client-resources-num-cpus=1 " in rendered
+    assert "client-resources-num-cpus=1.0" not in rendered
     assert "client-resources-num-gpus=0.125" in rendered
     assert "init-args-num-gpus=1" in rendered
     assert "num-supernodes=27" in rendered

@@ -75,7 +75,7 @@ def _federation_config(config: ExperimentConfig) -> str:
     """Flower/Ray resources, including explicit CUDA visibility for ClientApp actors."""
     fields = [
         f"num-supernodes={config.num_clients()}",
-        f"client-resources-num-cpus={config.client_num_cpus}",
+        f"client-resources-num-cpus={int(config.client_num_cpus)}",
         f"client-resources-num-gpus={config.client_num_gpus}",
         f"init-args-num-cpus={max(1, int(config.max_concurrent_clients * config.client_num_cpus))}",
     ]

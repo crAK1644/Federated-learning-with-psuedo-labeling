@@ -206,7 +206,7 @@ class ExperimentConfig(BaseModel):
     resume_from: Path | None = None
 
     # --- resources (simulation) -----------------------------------------
-    client_num_cpus: float = 1.0
+    client_num_cpus: int = 1
     client_num_gpus: float = 0.0
     max_concurrent_clients: int = 8
 
