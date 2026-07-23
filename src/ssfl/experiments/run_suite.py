@@ -17,7 +17,9 @@ Resumable: an entry whose deterministic run directory already has ``summary.json
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -84,6 +86,23 @@ def _federation_config(config: ExperimentConfig) -> str:
     return " ".join(fields)
 
 
+def compress_completed_jsonl(run_dir: Path) -> list[Path]:
+    """Losslessly compress completed attempt logs, leaving active runs untouched."""
+    compressed: list[Path] = []
+    for source in sorted((run_dir / "attempts").glob("**/*.jsonl")):
+        target = source.with_suffix(f"{source.suffix}.gz")
+        temporary = target.with_suffix(f"{target.suffix}.tmp")
+        with source.open("rb") as input_stream, temporary.open("wb") as raw_output:
+            with gzip.GzipFile(
+                filename="", mode="wb", fileobj=raw_output, compresslevel=6, mtime=0
+            ) as output_stream:
+                shutil.copyfileobj(input_stream, output_stream)
+        temporary.replace(target)
+        source.unlink()
+        compressed.append(target)
+    return compressed
+
+
 def run_suite(
     matrix_path: Path,
     resume: bool,
@@ -100,6 +119,9 @@ def run_suite(
         run_dir = _run_dir(config)
         summary_path = run_dir / "summary.json"
         if resume and summary_path.exists():
+            compressed = compress_completed_jsonl(run_dir)
+            if compressed:
+                print(f"[run_suite] COMPRESS {name} ({len(compressed)} JSONL files)")
             print(f"[run_suite] SKIP  {name} (already complete: {summary_path})")
             results.append({"name": name, "status": "skipped", "run_dir": str(run_dir)})
             continue
@@ -143,6 +165,8 @@ def run_suite(
             )
             failed += 1
         else:
+            compressed = compress_completed_jsonl(run_dir)
+            print(f"[run_suite] COMPRESS {name} ({len(compressed)} JSONL files)")
             print(f"[run_suite] DONE  {name}")
             results.append({"name": name, "status": "done", "run_dir": str(run_dir)})
 

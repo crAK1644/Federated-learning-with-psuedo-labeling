@@ -82,14 +82,16 @@ confusion_matrices.npz          raw confusion matrix per round
 communication.parquet          every message, tensor shape/dtype, real/wire/paper bytes
 checkpoints/                    server milestones/final and latest resumable per-client weights
 attempts/<attempt-id>/
-  events.jsonl                  compact server aggregation stream
-  telemetry/server.jsonl        rounds, phases, GPU/system, evaluation details
-  telemetry/clients/*.jsonl     every client epoch/phase/prediction/evaluation summary
+  events.jsonl[.gz]             compact server aggregation stream
+  telemetry/server.jsonl[.gz]   rounds, phases, GPU/system, evaluation details
+  telemetry/clients/*.jsonl[.gz] every client epoch/phase/prediction/evaluation summary
   aggregation_audit/*.npz       full SSFL vote counts, participation, labels, masks
 ```
 
 Raw private samples, model weights, gradients, and secret values are deliberately not copied into
-JSON logs. Checkpoints contain model state and must be protected as sensitive artifacts.
+JSON logs. The matrix runner losslessly gzip-compresses JSONL after each run completes; active and
+interrupted runs stay uncompressed for live tailing. Checkpoints contain model state and must be
+protected as sensitive artifacts.
 
 ## Real (non-simulation) deployment
 

@@ -1,3 +1,4 @@
+import gzip
 import json
 import subprocess
 
@@ -5,7 +6,13 @@ import pytest
 import yaml
 
 from ssfl.config import ExperimentConfig
-from ssfl.experiments.run_suite import _federation_config, _run_dir, build_matrix_configs, run_suite
+from ssfl.experiments.run_suite import (
+    _federation_config,
+    _run_dir,
+    build_matrix_configs,
+    compress_completed_jsonl,
+    run_suite,
+)
 
 
 def _write_yaml(path, data) -> None:
@@ -166,6 +173,9 @@ def test_run_suite_resume_skips_entry_with_existing_summary(
     run_dir = _run_dir(config)
     run_dir.mkdir(parents=True)
     (run_dir / "summary.json").write_text("{}")
+    telemetry = run_dir / "attempts" / "attempt-1" / "telemetry" / "server.jsonl"
+    telemetry.parent.mkdir(parents=True)
+    telemetry.write_text('{"event":"run_end"}\n')
 
     def _fail_if_called(*args, **kwargs):
         raise AssertionError("subprocess.run must not be called for an already-completed entry")
@@ -185,5 +195,28 @@ def test_run_suite_resume_skips_entry_with_existing_summary(
 
     assert exit_code == 0
     assert not (generated_dir / "variant_a.yaml").exists()  # skipped before ever writing a profile
+    assert not telemetry.exists()
+    with gzip.open(telemetry.with_suffix(".jsonl.gz"), "rt") as stream:
+        assert stream.read() == '{"event":"run_end"}\n'
     report = json.loads((report_dir / "suite_report_matrix.json").read_text())
     assert report["results"][0]["status"] == "skipped"
+
+
+def test_compress_completed_jsonl_is_lossless_and_idempotent(tmp_path) -> None:
+    first = tmp_path / "attempts" / "one" / "events.jsonl"
+    second = tmp_path / "attempts" / "one" / "telemetry" / "clients" / "c1.jsonl"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.write_text('{"event":"round_end","round":1}\n')
+    second.write_text('{"event":"training_epoch","epoch":1}\n')
+
+    compressed = compress_completed_jsonl(tmp_path)
+
+    assert compressed == [first.with_suffix(".jsonl.gz"), second.with_suffix(".jsonl.gz")]
+    assert not first.exists()
+    assert not second.exists()
+    with gzip.open(compressed[0], "rt") as stream:
+        assert stream.read() == '{"event":"round_end","round":1}\n'
+    with gzip.open(compressed[1], "rt") as stream:
+        assert stream.read() == '{"event":"training_epoch","epoch":1}\n'
+    assert compress_completed_jsonl(tmp_path) == []
