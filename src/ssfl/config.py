@@ -334,6 +334,16 @@ def load_experiment_config(
     return ExperimentConfig.model_validate(base)
 
 
+def _resolve_runtime_paths(config: ExperimentConfig, repo_root: Path) -> ExperimentConfig:
+    """Anchor profile paths to the app root before Flower changes the runtime working directory."""
+    updates: dict[str, Path] = {}
+    for field in ("data_path", "output_path", "resume_from"):
+        path = getattr(config, field)
+        if path is not None and not path.is_absolute():
+            updates[field] = (repo_root / path).resolve()
+    return config.model_copy(update=updates)
+
+
 def experiment_config_from_run_config(run_config: dict[str, Any]) -> ExperimentConfig:
     """Build an :class:`ExperimentConfig` from a Flower ``Context.run_config`` dict (the
     hyphenated flat mapping ``ClientApp``/``ServerApp`` receive at runtime).
@@ -360,8 +370,8 @@ def experiment_config_from_run_config(run_config: dict[str, Any]) -> ExperimentC
         repo_root / "artifacts" / "generated_configs" / f"{profile}.yaml",
     ):
         if candidate.exists():
-            return load_experiment_config(candidate, overrides)
-    return ExperimentConfig.model_validate(overrides)
+            return _resolve_runtime_paths(load_experiment_config(candidate, overrides), repo_root)
+    return _resolve_runtime_paths(ExperimentConfig.model_validate(overrides), repo_root)
 
 
 def load_data_prep_config(overrides: dict[str, Any]) -> DataPrepConfig:

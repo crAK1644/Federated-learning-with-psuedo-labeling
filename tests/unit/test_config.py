@@ -83,6 +83,8 @@ def test_empty_resume_default_is_treated_as_none() -> None:
         }
     )
     assert cfg.resume_from is None
+    assert cfg.data_path == CONFIGS_DIR.parent / "artifacts/data"
+    assert cfg.output_path == CONFIGS_DIR.parent / "artifacts/runs"
 
 
 def test_num_clients_matches_scenario() -> None:
