@@ -20,10 +20,16 @@ from ssfl.training import TrainResult
 def test_distillation_reply_never_carries_model_arrays() -> None:
     """SSFL phase-B, FD phase-B, and DS-FL phase-B client steps (client_distillation_step /
     fd.client_distillation_step / dsfl.distill_step) all return this one type. If it ever grows a
-    model-shaped field, every distillation reply built from it would start leaking parameters --
-    this pins the type to exactly the scalar-loss-history shape it has today."""
+    model-shaped field, every distillation reply built from it would start leaking parameters.
+    Telemetry metadata is allowed, but model/tensor fields are not."""
     field_names = {f.name for f in dataclasses.fields(TrainResult)}
-    assert field_names == {"epoch_losses"}
+    assert field_names == {
+        "epoch_losses",
+        "epoch_metrics",
+        "total_examples",
+        "total_batches",
+        "duration_seconds",
+    }
     instance = TrainResult(epoch_losses=[1.0, 0.5])
     for value in dataclasses.asdict(instance).values():
         assert not isinstance(value, torch.nn.Module)
@@ -78,6 +84,7 @@ def test_client_model_persists_and_differs_across_clients() -> None:
         assert torch.equal(pa1, pa2)  # persisted, not reinitialized
 
     differs = any(
-        not torch.equal(pa, pb) for pa, pb in zip(clf_a2.parameters(), clf_b2.parameters(), strict=True)
+        not torch.equal(pa, pb)
+        for pa, pb in zip(clf_a2.parameters(), clf_b2.parameters(), strict=True)
     )
     assert differs  # client A's trained weights never leaked into client B's state

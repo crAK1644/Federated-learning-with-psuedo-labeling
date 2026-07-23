@@ -4,7 +4,8 @@ import subprocess
 import pytest
 import yaml
 
-from ssfl.experiments.run_suite import _run_dir, build_matrix_configs, run_suite
+from ssfl.config import ExperimentConfig
+from ssfl.experiments.run_suite import _federation_config, _run_dir, build_matrix_configs, run_suite
 
 
 def _write_yaml(path, data) -> None:
@@ -43,7 +44,15 @@ def test_build_matrix_configs_resolves_overrides(tmp_path, configs_dir) -> None:
     matrix_path = tmp_path / "matrix.yaml"
     _write_yaml(
         matrix_path,
-        {"entries": [{"name": "variant_a", "base_profile": "base", "overrides": {"ssfl_discriminator_mode": "disabled"}}]},
+        {
+            "entries": [
+                {
+                    "name": "variant_a",
+                    "base_profile": "base",
+                    "overrides": {"ssfl_discriminator_mode": "disabled"},
+                }
+            ]
+        },
     )
     resolved = build_matrix_configs(matrix_path, configs_dir=configs_dir)
     assert len(resolved) == 1
@@ -53,17 +62,39 @@ def test_build_matrix_configs_resolves_overrides(tmp_path, configs_dir) -> None:
     assert config.ssfl_discriminator_mode.value == "disabled"
 
 
+def test_federation_config_allocates_gpu_fraction_and_concurrency(configs_dir) -> None:
+    config = ExperimentConfig.model_validate(
+        {
+            **yaml.safe_load((configs_dir / "base.yaml").read_text()),
+            "device": "cuda",
+            "client_num_gpus": 0.125,
+            "max_concurrent_clients": 8,
+        }
+    )
+    rendered = _federation_config(config)
+    assert "client-resources-num-gpus=0.125" in rendered
+    assert "init-args-num-gpus=1" in rendered
+    assert "num-supernodes=27" in rendered
+
+
 def test_build_matrix_configs_rejects_duplicate_names(tmp_path, configs_dir) -> None:
     matrix_path = tmp_path / "matrix.yaml"
     _write_yaml(
         matrix_path,
-        {"entries": [{"name": "dup", "base_profile": "base"}, {"name": "dup", "base_profile": "base"}]},
+        {
+            "entries": [
+                {"name": "dup", "base_profile": "base"},
+                {"name": "dup", "base_profile": "base"},
+            ]
+        },
     )
     with pytest.raises(ValueError, match="duplicate"):
         build_matrix_configs(matrix_path, configs_dir=configs_dir)
 
 
-def test_build_matrix_configs_rejects_name_colliding_with_existing_profile(tmp_path, configs_dir) -> None:
+def test_build_matrix_configs_rejects_name_colliding_with_existing_profile(
+    tmp_path, configs_dir
+) -> None:
     matrix_path = tmp_path / "matrix.yaml"
     _write_yaml(matrix_path, {"entries": [{"name": "base", "base_profile": "base"}]})
     with pytest.raises(ValueError, match="collides"):
@@ -75,7 +106,15 @@ def test_build_matrix_configs_fails_fast_on_invalid_ssfl_combination(tmp_path, c
     _write_yaml(
         matrix_path,
         # hard label representation + voting disabled is not one of the five valid combinations.
-        {"entries": [{"name": "bad", "base_profile": "base", "overrides": {"ssfl_voting_mode": "disabled"}}]},
+        {
+            "entries": [
+                {
+                    "name": "bad",
+                    "base_profile": "base",
+                    "overrides": {"ssfl_voting_mode": "disabled"},
+                }
+            ]
+        },
     )
     with pytest.raises(Exception, match="invalid ssfl_label_representation"):
         build_matrix_configs(matrix_path, configs_dir=configs_dir)
@@ -112,7 +151,9 @@ def test_run_suite_dry_run_writes_generated_config_and_report_without_launching(
     ]
 
 
-def test_run_suite_resume_skips_entry_with_existing_summary(tmp_path, configs_dir, monkeypatch) -> None:
+def test_run_suite_resume_skips_entry_with_existing_summary(
+    tmp_path, configs_dir, monkeypatch
+) -> None:
     matrix_path = tmp_path / "matrix.yaml"
     _write_yaml(matrix_path, {"entries": [{"name": "variant_a", "base_profile": "base"}]})
     # Fixed stub so the run_dir computed here (pre-patch) matches the one run_suite computes

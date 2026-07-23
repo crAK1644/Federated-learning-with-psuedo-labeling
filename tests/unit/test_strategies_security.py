@@ -29,15 +29,14 @@ def _reply(arrays: dict, metrics: dict, src_node_id: int) -> Message:
         ttl=100.0,
         message_type="train",
     )
-    content = RecordDict({"arrays": array_record_from_numpy(arrays), "metrics": MetricRecord(metrics)})
+    content = RecordDict(
+        {"arrays": array_record_from_numpy(arrays), "metrics": MetricRecord(metrics)}
+    )
     return Message(content=content, metadata=meta)
 
 
 def _good_ssfl_arrays():
-    return {
-        "confidences": np.array([0.9, 0.5, 0.1, 0.99], dtype=np.float32),
-        "pseudo_labels": np.array([2, -1, 0, 10], dtype=np.int64),
-    }
+    return {"pseudo_labels": np.array([2, -1, 0, 10], dtype=np.int8)}
 
 
 def _ssfl_metrics():
@@ -46,7 +45,11 @@ def _ssfl_metrics():
 
 def test_ssfl_drops_reply_from_unsampled_sender():
     strategy = SSFLStrategy(
-        scenario=1, dataset_manifest_hash="h", num_open=NUM_OPEN, num_clients=2, voting_mode=VotingMode.enabled
+        scenario=1,
+        dataset_manifest_hash="h",
+        num_open=NUM_OPEN,
+        num_clients=2,
+        voting_mode=VotingMode.enabled,
     )
     strategy._current_node_ids = [1, 2]
     intruder = _reply(_good_ssfl_arrays(), _ssfl_metrics(), src_node_id=999)
@@ -56,12 +59,19 @@ def test_ssfl_drops_reply_from_unsampled_sender():
 
 def test_ssfl_drops_malformed_payload_but_keeps_valid_ones():
     strategy = SSFLStrategy(
-        scenario=1, dataset_manifest_hash="h", num_open=NUM_OPEN, num_clients=2, voting_mode=VotingMode.enabled
+        scenario=1,
+        dataset_manifest_hash="h",
+        num_open=NUM_OPEN,
+        num_clients=2,
+        voting_mode=VotingMode.enabled,
     )
     strategy._current_node_ids = [1, 2]
     good = _reply(_good_ssfl_arrays(), _ssfl_metrics(), src_node_id=1)
     malformed = _reply(
-        {"confidences": np.array([5.0, 5.0, 5.0, 5.0], dtype=np.float32), "pseudo_labels": np.array([2, -1, 0, 10], dtype=np.int64)},
+        {
+            "confidences": np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float32),
+            "pseudo_labels": np.array([2, -1, 0, 10], dtype=np.int8),
+        },
         _ssfl_metrics(),
         src_node_id=2,
     )
@@ -121,7 +131,11 @@ def test_all_strategies_survive_zero_replies():
     list. Must degrade to (None, None)/None, not raise -- the same path already proven for
     all-rejected replies above, exercised here for the genuinely-empty-list case directly."""
     ssfl = SSFLStrategy(
-        scenario=1, dataset_manifest_hash="h", num_open=NUM_OPEN, num_clients=2, voting_mode=VotingMode.enabled
+        scenario=1,
+        dataset_manifest_hash="h",
+        num_open=NUM_OPEN,
+        num_clients=2,
+        voting_mode=VotingMode.enabled,
     )
     ssfl._current_node_ids = [1, 2]
     assert ssfl.aggregate_train(server_round=1, replies=[]) == (None, None)

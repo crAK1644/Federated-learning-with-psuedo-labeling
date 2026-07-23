@@ -26,7 +26,19 @@ import numpy as np
 import pandas as pd
 import yaml
 
-CLASS_NAMES = ["Ben", "G_Co", "G_Ju", "G_Sc", "G_TCP", "G_UDP", "M_Ack", "M_Sc", "M_Syn", "M_UDP", "M_UDPp"]
+CLASS_NAMES = [
+    "Ben",
+    "G_Co",
+    "G_Ju",
+    "G_Sc",
+    "G_TCP",
+    "G_UDP",
+    "M_Ack",
+    "M_Sc",
+    "M_Syn",
+    "M_UDP",
+    "M_UDPp",
+]
 
 METHOD_LABELS = {
     ("fl", "cnn"): "FL",
@@ -174,16 +186,29 @@ def main_matrix_runs(records: list[RunRecord]) -> dict[tuple[str, int], RunRecor
             continue
         key = (label, r.scenario)
         cur = best.get(key)
-        if cur is None or (r.summary.get("final_round") or 0) > (cur.summary.get("final_round") or 0):
+        if cur is None or (r.summary.get("final_round") or 0) > (
+            cur.summary.get("final_round") or 0
+        ):
             best[key] = r
     return best
 
 
 def _cumulative_comm_mb(comms: pd.DataFrame) -> pd.Series:
-    """Cumulative logical MB by round, summing every direction/phase (matches the paper's
-    'communication overhead' framing: total bytes moved between server and clients through the
-    given round)."""
+    """Cumulative real logical MB, summing all clients, directions, and phases."""
     per_round = comms.groupby("round")["logical_bytes"].sum().sort_index()
+    return per_round.cumsum() / (1024 * 1024)
+
+
+def _cumulative_paper_comm_mb(comms: pd.DataFrame) -> pd.Series:
+    """Paper Table IV convention: representative-client uplink per communication round.
+
+    Zhao et al.'s 0.01 MB SSFL hard-label value equals one open-set hard-label vector, not the
+    federation-wide sum and not the downlink. ``paper_bytes`` also applies the paper's stated
+    double precision to soft labels independently of the real Flower transport dtype.
+    """
+    uplink = comms[(comms["direction"] == "client_to_server") & (comms["phase"] == "train")]
+    byte_column = "paper_bytes" if "paper_bytes" in uplink.columns else "logical_bytes"
+    per_round = uplink.groupby("round")[byte_column].mean().sort_index()
     return per_round.cumsum() / (1024 * 1024)
 
 
@@ -202,7 +227,11 @@ def build_table_ii(records: list[RunRecord]) -> pd.DataFrame:
         repro = {"accuracy": None, "f1": None, "precision": None}
         if run is not None and not run.metrics.empty:
             last = run.metrics.sort_values("round").iloc[-1]
-            repro = {"accuracy": float(last["accuracy"]), "f1": float(last["macro_f1"]), "precision": float(last["macro_precision"])}
+            repro = {
+                "accuracy": float(last["accuracy"]),
+                "f1": float(last["macro_f1"]),
+                "precision": float(last["macro_precision"]),
+            }
         rows.append(
             {
                 "method": label,
@@ -213,7 +242,9 @@ def build_table_ii(records: list[RunRecord]) -> pd.DataFrame:
                 "repro_f1": repro["f1"],
                 "paper_precision": ref["precision"],
                 "repro_precision": repro["precision"],
-                "rounds_completed": int(run.summary["final_round"]) if run and run.summary.get("final_round") else None,
+                "rounds_completed": int(run.summary["final_round"])
+                if run and run.summary.get("final_round")
+                else None,
                 "run_id": run.run_id if run else None,
             }
         )
@@ -247,7 +278,7 @@ def build_table_iv(records: list[RunRecord]) -> pd.DataFrame:
             run = cells.get((label, scenario))
             repro = {"c50": None, "c75": None, "c_top_acc": None, "top_acc": None}
             if run is not None and not run.metrics.empty and not run.comms.empty:
-                cum_mb = _cumulative_comm_mb(run.comms)
+                cum_mb = _cumulative_paper_comm_mb(run.comms)
                 repro["c50"] = _comm_at_accuracy(run.metrics, cum_mb, 0.50)
                 repro["c75"] = _comm_at_accuracy(run.metrics, cum_mb, 0.75)
                 best_row = run.metrics.loc[run.metrics["accuracy"].idxmax()]
@@ -303,10 +334,16 @@ def _study_records(records: list[RunRecord], tag: str) -> list[RunRecord]:
 
 
 def fig_allocation(data_dir: Path, output_dir: Path) -> Path | None:
-    scenario_files = sorted((data_dir / "scenarios").glob("*_allocation_stats.json")) if (data_dir / "scenarios").exists() else []
+    scenario_files = (
+        sorted((data_dir / "scenarios").glob("*_allocation_stats.json"))
+        if (data_dir / "scenarios").exists()
+        else []
+    )
     if not scenario_files:
         return None
-    fig, axes = plt.subplots(1, len(scenario_files), figsize=(6 * len(scenario_files), 5), squeeze=False)
+    fig, axes = plt.subplots(
+        1, len(scenario_files), figsize=(6 * len(scenario_files), 5), squeeze=False
+    )
     for ax, path in zip(axes[0], scenario_files):
         stats = json.loads(path.read_text())
         for ci, client in enumerate(stats["clients"], start=1):
@@ -355,7 +392,9 @@ def fig_confusion_matrices(records: list[RunRecord], output_dir: Path) -> Path |
     return out
 
 
-def fig_accuracy_curves(records: list[RunRecord], tag: str, label_fn, title: str, out_name: str, output_dir: Path) -> Path | None:
+def fig_accuracy_curves(
+    records: list[RunRecord], tag: str, label_fn, title: str, out_name: str, output_dir: Path
+) -> Path | None:
     runs = _study_records(records, tag)
     if not runs:
         return None
@@ -400,7 +439,7 @@ def fig_label_study(records: list[RunRecord], output_dir: Path) -> Path | None:
             label = _label_study_label(r.config)
             ax_acc.plot(m["round"], m["accuracy"] * 100, marker="o", label=label)
             if not r.comms.empty:
-                cum_mb = _cumulative_comm_mb(r.comms)
+                cum_mb = _cumulative_paper_comm_mb(r.comms)
                 rounds = sorted(cum_mb.index)
                 ax_comm.plot(rounds, [cum_mb[x] for x in rounds], marker="o", label=label)
         ax_acc.set_title(f"Scenario {scenario}: Test Accuracy")
@@ -447,7 +486,9 @@ def _write_markdown_report(
     figures: list[Path],
 ) -> None:
     lines = ["# SSFL reproduction report", ""]
-    lines.append(f"Generated from {len(records)} run director{'y' if len(records) == 1 else 'ies'} under `artifacts/runs/`.")
+    lines.append(
+        f"Generated from {len(records)} run director{'y' if len(records) == 1 else 'ies'} under `artifacts/runs/`."
+    )
     lines.append("")
     lines.append("## Table II -- Accuracy / F1 / Precision (reproduced vs. paper)")
     lines.append("")
@@ -481,9 +522,10 @@ def _write_markdown_report(
         "`communication.parquet`."
     )
     lines.append(
-        "- Reproduced communication cost sums `logical_bytes` (raw ndarray payload, not Flower's "
-        "serialized/protobuf `serialized_bytes`) across every message in `communication.parquet`, "
-        "both directions and both phases -- see `comms.py` and REPRODUCIBILITY.md."
+        "- Table IV follows the paper's representative-client train-uplink convention using "
+        "`paper_bytes` (including its stated double-precision soft labels). The complete real "
+        "logical and serialized traffic for every client/direction/phase remains available in "
+        "`communication.parquet`."
     )
     (output_dir / "report.md").write_text("\n".join(lines))
 
@@ -504,8 +546,22 @@ def build_report(runs_dir: Path, output_dir: Path, data_dir: Path = Path("artifa
         for p in [
             fig_allocation(data_dir, output_dir),
             fig_confusion_matrices(records, output_dir),
-            fig_accuracy_curves(records, "ablation", _ablation_label, "Fig 4: ablation study", "fig4_ablation.png", output_dir),
-            fig_accuracy_curves(records, "threshold", _threshold_label, "Fig 5: confidence threshold study", "fig5_threshold.png", output_dir),
+            fig_accuracy_curves(
+                records,
+                "ablation",
+                _ablation_label,
+                "Fig 4: ablation study",
+                "fig4_ablation.png",
+                output_dir,
+            ),
+            fig_accuracy_curves(
+                records,
+                "threshold",
+                _threshold_label,
+                "Fig 5: confidence threshold study",
+                "fig5_threshold.png",
+                output_dir,
+            ),
             fig_label_study(records, output_dir),
         ]
         if p is not None
@@ -515,7 +571,9 @@ def build_report(runs_dir: Path, output_dir: Path, data_dir: Path = Path("artifa
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build the SSFL Tables II-IV / Figures 2-6 report from artifacts/runs.")
+    parser = argparse.ArgumentParser(
+        description="Build the SSFL Tables II-IV / Figures 2-6 report from artifacts/runs."
+    )
     parser.add_argument("--runs", type=Path, default=Path("artifacts/runs"))
     parser.add_argument("--data-dir", type=Path, default=Path("artifacts/data"))
     parser.add_argument("--output", type=Path, default=Path("artifacts/report"))

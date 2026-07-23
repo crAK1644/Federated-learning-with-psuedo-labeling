@@ -10,6 +10,7 @@ from torch.utils.data import TensorDataset
 
 from ssfl.models import SSFLModel
 from ssfl.training import TrainResult, evaluate, make_loader, predict_probs, train_distillation
+from ssfl.telemetry import EventCallback
 
 
 @dataclass(frozen=True)
@@ -19,10 +20,26 @@ class SoftPredictionUpload:
 
 
 def client_predict_step(
-    client_id: str, classifier: SSFLModel, open_dataset, device: torch.device, batch_size: int, seed: int
+    client_id: str,
+    classifier: SSFLModel,
+    open_dataset,
+    device: torch.device,
+    batch_size: int,
+    seed: int,
+    event_callback: EventCallback | None = None,
 ) -> SoftPredictionUpload:
     loader = make_loader(open_dataset, batch_size, shuffle=False, seed=seed)
-    probs = predict_probs(classifier, loader, device).numpy().astype(np.float32)
+    probs = (
+        predict_probs(
+            classifier,
+            loader,
+            device,
+            event_callback=event_callback,
+            stage="client_dsfl_open_prediction",
+        )
+        .numpy()
+        .astype(np.float32)
+    )
     return SoftPredictionUpload(client_id, probs)
 
 
@@ -64,16 +81,38 @@ def distill_step(
     lr: float,
     batch_size: int,
     seed: int,
+    event_callback: EventCallback | None = None,
 ) -> TrainResult:
     """Client- or server-side distillation on the sharpened global soft targets -- same function,
     since both sides train identically on the same (open_x, sharpened_targets) pairs."""
     targets = torch.from_numpy(sharpened_targets).float()
-    loader = make_loader(TensorDataset(open_dataset.x, targets), batch_size, shuffle=True, seed=seed)
-    return train_distillation(model, loader, device, epochs, lr)
+    loader = make_loader(
+        TensorDataset(open_dataset.x, targets), batch_size, shuffle=True, seed=seed
+    )
+    return train_distillation(
+        model,
+        loader,
+        device,
+        epochs,
+        lr,
+        event_callback=event_callback,
+        stage="dsfl_distillation",
+    )
 
 
 def server_evaluate(
-    model: SSFLModel, test_dataset, device: torch.device, batch_size: int, seed: int
+    model: SSFLModel,
+    test_dataset,
+    device: torch.device,
+    batch_size: int,
+    seed: int,
+    event_callback: EventCallback | None = None,
 ) -> dict[str, float]:
     loader = make_loader(test_dataset, batch_size, shuffle=False, seed=seed)
-    return evaluate(model, loader, device)
+    return evaluate(
+        model,
+        loader,
+        device,
+        event_callback=event_callback,
+        stage="server_dsfl_test",
+    )

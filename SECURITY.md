@@ -122,79 +122,37 @@ in `configs/*.yaml`).
 
 ## Logging
 
-`src/ssfl/logging_utils.py` provides structured JSON-lines logging (`configure_logging`/`bind`/
-`log_event`) with a forbidden-field guard (`ForbiddenLogFieldError`) that refuses to log any field
-whose key matches a private-data/model-tensor/secret pattern (`_FORBIDDEN_KEY_SUBSTRINGS`). Until
-this pass this module existed but **was never called from `server_app.py` or `client_app.py`** —
-`run_context.py`'s `events.jsonl` was a documented-but-never-written file. Now wired:
+Logging is attempt-scoped so restarting the same deterministic run ID never interleaves separate
+executions. The server stream records run, round, phase, reply, payload-shape, timing, checkpoint,
+classification, CUDA allocator, and one-second `nvidia-smi` events. Every client writes its own
+JSONL stream containing each training/prediction/evaluation batch and epoch, including loss,
+accuracy where defined, gradient/parameter norms, duration, and CUDA memory statistics.
 
-- `server_app.py::main()` opens `<run_dir>/events.jsonl` and binds a logger with
-  `run_id`/`algorithm`/`scenario`, emitting `run_start` (with `dataset_hash`) and `run_end` (with
-  `final_round`) events.
-- `comms.py::CommsTrackingStrategy` — the single point every algorithm's `aggregate_train`/
-  `aggregate_evaluate` already passes through — emits one `aggregate` event per round/phase with
-  `round`, `phase`, `num_replies`, and every numeric scalar the inner strategy's metrics returned
-  (e.g. SSFL's `valid_rate`/`tie_count`/`all_abstain_count`/`rejected_count`). It never touches
-  `arrays_out`, so model weights/pseudo-labels/soft-probs cannot end up in the log by construction —
-  the forbidden-field guard is defense-in-depth on top of that structural exclusion, not the only
-  thing standing between this code and logging something sensitive.
-- Client-side (`client_app.py`) logging is **not yet wired** — deferred, since the server-side
-  aggregation log already captures round/phase/rejection observability without needing every
-  client process (there can be up to 89) to also log independently.
-- Verified end-to-end against a real Flower CPU simulation, not just the wiring compiling: a live
-  SSFL smoke run initially produced an `events.jsonl` where every per-call field (`round`, `phase`,
-  `num_replies`, `valid_rate`, `tie_count`, ...) was silently missing — a bug in `log_event`'s
-  interaction with `bind()`'s `LoggerAdapter` (see `REPRODUCIBILITY.md` #26), now fixed and covered
-  by `tests/unit/test_logging_utils.py` and a `logging_utils.py` self-check. Re-running the same
-  smoke confirmed `events.jsonl` now carries the full field set.
+The exhaustive logs remain privacy-aware: raw private feature/label values, gradients, parameter
+tensors, prediction vectors, credentials, and secrets are not serialized. SSFL confidence vectors
+remain client-local; the canonical wire payload contains only filtered hard labels. Checkpoints do
+contain model parameters and therefore require the same access control as other training artifacts.
 
 ## Metrics
 
-Covered today: test-set accuracy/precision/recall/F1 (`metrics.py::MetricsLedger`, evaluate-phase
-only), per-round communication bytes (`comms.py::CommsLedger`, logical + serialized), valid
-pseudo-label rate / tie count / all-abstain count / accepted-proposal count / **rejected reply
-count** (new this pass) for SSFL, and an equivalent `rejected_count` for FD/DS-FL — all flow into
-the `aggregate` log events above.
-
-Not covered (flagged, not built this pass — would need real multi-process deployment or dedicated
-instrumentation neither of which exist yet): active/ready/failed client counts, round/phase wall-clock
-latency as a first-class metric (only whole-run wall-clock is captured today), per-class vote
-distribution as a *persisted* artifact (`AggregationResult.votes_per_class` is computed in-memory
-every round but never written anywhere), and memory/compute utilization.
+`metrics.parquet`, `per_class_metrics.parquet`, and `confusion_matrices.npz` are atomically rewritten
+after every evaluation. `communication.parquet` is flushed after every message group and records
+logical ndarray bytes, actual serialized bytes, and the paper's representative-client accounting.
+SSFL additionally persists every round's complete vote matrix, participation counts, consensus
+labels, and validity mask under the attempt's `aggregation_audit/` directory.
 
 ## Recovery
 
-**Corrected during this pass** — an earlier draft of this section claimed mid-run checkpoint/resume
-"exists and [was] verified by earlier milestones." That was wrong; found by grepping for actual
-call sites, the same way the logging-was-dead-code gap (above) was found. What actually exists:
+The paper profiles checkpoint the server arrays/model and all persistent client models after every
+completed round. A resumed ServerApp restores the latest complete server checkpoint, begins at the
+next round, and clients recover their latest earlier checkpoint when Flower state is empty. Metrics
+and communication ledgers load only during resume and replace duplicate round rows idempotently.
+Each restart creates a new attempt directory, retaining the full history without mixing event files.
 
-- `RunContext.checkpoints_dir`, `RunContext.last_completed_round()` (scans `checkpoints/round_*.pt`),
-  and `RunContext.resume()` (re-validates `resolved_config.yaml` against the current
-  `ExperimentConfig` schema) are all implemented in `run_context.py`, and `ExperimentConfig` has
-  `checkpoint_interval`/`checkpoint_rounds`/`resume_from` fields.
-- **Nothing calls any of them from the real training path.** `server_app.py::main()` always calls
-  `RunContext.create(...)`, never `RunContext.resume(...)`; nothing ever writes a
-  `checkpoints/round_<N>.pt` file; `resume_from` is read nowhere. `last_completed_round()` would
-  always return `0` in practice. This means a single `flwr run` interrupted mid-training (e.g. at
-  round 87/200) has no way to resume from round 88 — it can only be restarted from round 1.
-- The one form of resume that *does* work: `run_suite.py --resume` skips a matrix entry whose
-  `summary.json` already exists — i.e. it resumes an interrupted *experiment matrix* (skip
-  already-fully-completed runs), not an interrupted *single run*. Do not conflate the two when
-  reading `REPRODUCIBILITY.md` or `run_suite.py`'s docstring.
-- Building real mid-run checkpoint/resume (persisting the strategy's `ArrayRecord` state per round,
-  restoring it into `Strategy.start()`, handling Ray/simulation-process restart) is out of scope for
-  this pass — flagged here rather than left as a silently false "done" claim. See
-  `REPRODUCIBILITY.md` #27.
-
-Not verified this pass (separate from the above, flagged as open questions): configurable
-retry/timeout limits on a hung client; explicit behavior when fewer than the expected number of
-clients respond in a round (`Strategy.start()`'s built-in `min_*_nodes` semantics apply to FL's
-stock `FedAvg`; the three custom strategies have no equivalent minimum-participation check — an
-SSFL round with only 1 of 27 clients responding would proceed with whatever plurality that gives);
-whether cancelling a run mid-round preserves previously-completed rounds' results (`metrics.parquet`/
-`communication.parquet` are written once at the very end of `main()`, not incrementally — so killing
-a run mid-training currently loses ALL of that run's metrics/comms data, not just the incomplete
-round; only the identity files written by `RunContext.create()` up front would survive).
+An interruption during a round intentionally resumes from the preceding completed round; partial
+round state is never treated as committed. `run_suite.py --resume` separately skips already-finished
+matrix entries. Hung-client retry policy and Byzantine/colluding-majority recovery remain outside
+the paper's threat model.
 
 ## Optional extension profiles (out of scope, per plan)
 

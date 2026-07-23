@@ -23,6 +23,7 @@ from ssfl.config import DiscriminatorMode, LabelRepresentation, ThresholdPolicy
 from ssfl.models import SSFLModel
 from ssfl.protocols.message import Envelope
 from ssfl.training import evaluate, make_loader, predict_probs, train_supervised
+from ssfl.telemetry import EventCallback
 
 ABSTAIN = -1
 
@@ -31,11 +32,11 @@ ABSTAIN = -1
 class ProposalResult:
     client_id: str
     # Exactly one of pseudo_labels/soft_probs is set, matching ssfl_label_representation:
-    # hard -> pseudo_labels (int64, ABSTAIN(-1) or class index); soft -> soft_probs (float32,
+    # hard -> pseudo_labels (int8, ABSTAIN(-1) or class index); soft -> soft_probs (float32,
     # (num_open, num_classes), an all-zero row standing in for "unfamiliar" -- softmax output
     # never legitimately sums to 0, so a zero row is unambiguous).
     pseudo_labels: np.ndarray | None
-    confidences: np.ndarray  # float32, len == num_open (classifier max-prob; audit-only)
+    confidences: np.ndarray | None  # client-local audit only; never serialized by canonical SSFL
     threshold: float
     classifier_loss: float
     discriminator_loss: float | None  # None when discriminator_mode != enabled (never trained)
@@ -65,6 +66,7 @@ def client_proposal_step(
     discriminator_mode: DiscriminatorMode = DiscriminatorMode.enabled,
     label_representation: LabelRepresentation = LabelRepresentation.hard,
     soft_round_decimals: int | None = None,
+    event_callback: EventCallback | None = None,
 ) -> ProposalResult:
     """Phase A: train classifier on private data, score the open set, then decide which open
     examples are "familiar" one of three ways (``discriminator_mode``) and encode the result one
@@ -72,10 +74,24 @@ def client_proposal_step(
     are combinations of (full / no-discriminator / no-voting / no-discriminator-or-voting /
     simple-filtering; see ``REPRODUCIBILITY.md``)."""
     private_loader = make_loader(private_dataset, batch_size, shuffle=True, seed=seed)
-    classifier_result = train_supervised(classifier, private_loader, device, epochs, lr)
+    classifier_result = train_supervised(
+        classifier,
+        private_loader,
+        device,
+        epochs,
+        lr,
+        event_callback=event_callback,
+        stage="client_classifier_supervised",
+    )
 
     open_loader = make_loader(open_dataset, batch_size, shuffle=False, seed=seed)
-    open_probs = predict_probs(classifier, open_loader, device)
+    open_probs = predict_probs(
+        classifier,
+        open_loader,
+        device,
+        event_callback=event_callback,
+        stage="client_open_classifier_prediction",
+    )
     confidences = open_probs.max(dim=1).values.numpy()
     threshold = compute_threshold(confidences, threshold_policy)
     class_predictions = open_probs.argmax(dim=1).numpy()
@@ -97,14 +113,30 @@ def client_proposal_step(
                 torch.ones(unfamiliar_x.shape[0], dtype=torch.long),
             ]
         )
-        disc_loader = make_loader(TensorDataset(disc_x, disc_y), batch_size, shuffle=True, seed=seed)
-        discriminator_result = train_supervised(discriminator, disc_loader, device, epochs, lr)
-        familiar_probs = predict_probs(discriminator, open_loader, device)
+        disc_loader = make_loader(
+            TensorDataset(disc_x, disc_y), batch_size, shuffle=True, seed=seed
+        )
+        discriminator_result = train_supervised(
+            discriminator,
+            disc_loader,
+            device,
+            epochs,
+            lr,
+            event_callback=event_callback,
+            stage="client_discriminator_supervised",
+        )
+        familiar_probs = predict_probs(
+            discriminator,
+            open_loader,
+            device,
+            event_callback=event_callback,
+            stage="client_open_discriminator_prediction",
+        )
         familiar_mask = familiar_probs.argmax(dim=1).numpy() == 0
         discriminator_loss = discriminator_result.final_loss
 
     if label_representation == LabelRepresentation.hard:
-        pseudo_labels = np.where(familiar_mask, class_predictions, ABSTAIN).astype(np.int64)
+        pseudo_labels = np.where(familiar_mask, class_predictions, ABSTAIN).astype(np.int8)
         soft_probs = None
     else:
         soft = np.where(familiar_mask[:, None], open_probs.numpy(), 0.0).astype(np.float32)
@@ -112,6 +144,30 @@ def client_proposal_step(
             soft = np.round(soft, decimals=soft_round_decimals).astype(np.float32)
         pseudo_labels = None
         soft_probs = soft
+
+    if event_callback:
+        counts = np.bincount(class_predictions, minlength=open_probs.shape[1])
+        event_callback(
+            "proposal_summary",
+            {
+                "threshold": threshold,
+                "confidence_min": float(confidences.min()),
+                "confidence_q05": float(np.quantile(confidences, 0.05)),
+                "confidence_q25": float(np.quantile(confidences, 0.25)),
+                "confidence_median": float(np.median(confidences)),
+                "confidence_q75": float(np.quantile(confidences, 0.75)),
+                "confidence_q95": float(np.quantile(confidences, 0.95)),
+                "confidence_max": float(confidences.max()),
+                "confidence_mean": float(confidences.mean()),
+                "confidence_std": float(confidences.std()),
+                "familiar_count": int(familiar_mask.sum()),
+                "unfamiliar_count": int((~familiar_mask).sum()),
+                "familiar_rate": float(familiar_mask.mean()),
+                "prediction_class_counts": counts.tolist(),
+                "classifier_final_loss": classifier_result.final_loss,
+                "discriminator_final_loss": discriminator_loss,
+            },
+        )
 
     return ProposalResult(
         client_id=client_id,
@@ -245,12 +301,21 @@ def client_distillation_step(
     lr: float,
     batch_size: int,
     seed: int,
+    event_callback: EventCallback | None = None,
 ):
     """Phase B (client): hard-label CE on the valid subset of the global open labels. Returns
     metrics only -- no model parameters cross this function's boundary back to a message."""
     dataset = _valid_open_dataset(open_dataset, aggregation)
     loader = make_loader(dataset, batch_size, shuffle=True, seed=seed)
-    return train_supervised(classifier, loader, device, epochs, lr)
+    return train_supervised(
+        classifier,
+        loader,
+        device,
+        epochs,
+        lr,
+        event_callback=event_callback,
+        stage="client_global_label_distillation",
+    )
 
 
 def server_distillation_step(
@@ -263,13 +328,28 @@ def server_distillation_step(
     lr: float,
     batch_size: int,
     seed: int,
+    event_callback: EventCallback | None = None,
 ):
     """Phase B (server): train the server's own persistent classifier on the same valid open
     labels, then evaluate it on the full test set."""
     dataset = _valid_open_dataset(open_dataset, aggregation)
     loader = make_loader(dataset, batch_size, shuffle=True, seed=seed)
-    train_result = train_supervised(server_classifier, loader, device, epochs, lr)
+    train_result = train_supervised(
+        server_classifier,
+        loader,
+        device,
+        epochs,
+        lr,
+        event_callback=event_callback,
+        stage="server_global_label_distillation",
+    )
 
     test_loader = make_loader(test_dataset, batch_size, shuffle=False, seed=seed)
-    eval_metrics = evaluate(server_classifier, test_loader, device)
+    eval_metrics = evaluate(
+        server_classifier,
+        test_loader,
+        device,
+        event_callback=event_callback,
+        stage="server_test_evaluation",
+    )
     return train_result, eval_metrics

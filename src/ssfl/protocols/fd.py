@@ -7,6 +7,8 @@ weighting scheme; see REPRODUCIBILITY.md assumption #14.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+import time
 
 import numpy as np
 import torch
@@ -14,7 +16,14 @@ from torch.nn import functional as F
 from torch.utils.data import TensorDataset
 
 from ssfl.models import NUM_CLASSES, SSFLModel
-from ssfl.training import TrainResult, build_optimizer, make_loader, predict_probs, teacher_distribution_loss
+from ssfl.training import (
+    TrainResult,
+    build_optimizer,
+    make_loader,
+    predict_probs,
+    teacher_distribution_loss,
+)
+from ssfl.telemetry import EventCallback, gpu_snapshot
 
 
 @dataclass(frozen=True)
@@ -27,10 +36,22 @@ class ClassLogitUpload:
 
 
 def client_class_logits_step(
-    client_id: str, classifier: SSFLModel, private_dataset, device: torch.device, batch_size: int, seed: int
+    client_id: str,
+    classifier: SSFLModel,
+    private_dataset,
+    device: torch.device,
+    batch_size: int,
+    seed: int,
+    event_callback: EventCallback | None = None,
 ) -> ClassLogitUpload:
     loader = make_loader(private_dataset, batch_size, shuffle=False, seed=seed)
-    probs = predict_probs(classifier, loader, device).numpy()
+    probs = predict_probs(
+        classifier,
+        loader,
+        device,
+        event_callback=event_callback,
+        stage="client_fd_private_prediction",
+    ).numpy()
     labels = private_dataset.y.numpy()
 
     class_probs = np.zeros((NUM_CLASSES, NUM_CLASSES), dtype=np.float32)
@@ -105,6 +126,7 @@ def client_distillation_step(
     lr: float,
     batch_size: int,
     seed: int,
+    event_callback: EventCallback | None = None,
 ) -> TrainResult:
     """Equal-weight ground-truth CE + teacher-CE, restricted to private examples whose class has
     a valid leave-self-out target (assumption #14: 1:1 weighting)."""
@@ -123,16 +145,88 @@ def client_distillation_step(
     classifier.to(device)
     classifier.train()
     optimizer = build_optimizer(classifier, lr)
-    for _ in range(epochs):
+    started = time.perf_counter()
+    if event_callback:
+        event_callback(
+            "training_start",
+            {
+                "stage": "client_fd_distillation",
+                "epochs": epochs,
+                "learning_rate": lr,
+                "num_batches": len(loader),
+                "device": str(device),
+                **gpu_snapshot(),
+            },
+        )
+    for epoch_index in range(1, epochs + 1):
+        epoch_started = time.perf_counter()
         total_loss, total_count = 0.0, 0
-        for xb, yb, tb in loader:
+        for batch_index, (xb, yb, tb) in enumerate(loader, start=1):
+            batch_started = time.perf_counter()
             xb, yb, tb = xb.to(device), yb.to(device), tb.to(device)
             optimizer.zero_grad()
             logits = classifier(xb)
             loss = F.cross_entropy(logits, yb) + teacher_distribution_loss(logits, tb)
             loss.backward()
+            gradient_l2 = math.sqrt(
+                sum(
+                    float(parameter.grad.detach().float().pow(2).sum().item())
+                    for parameter in classifier.parameters()
+                    if parameter.grad is not None
+                )
+            )
             optimizer.step()
             total_loss += loss.item() * xb.shape[0]
             total_count += xb.shape[0]
-        result.epoch_losses.append(total_loss / total_count)
+            result.total_batches += 1
+            result.total_examples += int(xb.shape[0])
+            parameter_l2 = math.sqrt(
+                sum(
+                    float(parameter.detach().float().pow(2).sum().item())
+                    for parameter in classifier.parameters()
+                )
+            )
+            if event_callback:
+                event_callback(
+                    "training_batch",
+                    {
+                        "stage": "client_fd_distillation",
+                        "epoch": epoch_index,
+                        "batch": batch_index,
+                        "batch_size": int(xb.shape[0]),
+                        "loss": float(loss.item()),
+                        "gradient_l2_norm": gradient_l2,
+                        "parameter_l2_norm": parameter_l2,
+                        "learning_rate": float(optimizer.param_groups[0]["lr"]),
+                        "duration_seconds": time.perf_counter() - batch_started,
+                        **gpu_snapshot(),
+                    },
+                )
+        epoch_loss = total_loss / total_count
+        result.epoch_losses.append(epoch_loss)
+        result.epoch_metrics.append(
+            {
+                "stage": "client_fd_distillation",
+                "epoch": epoch_index,
+                "loss": epoch_loss,
+                "examples": total_count,
+                "batches": len(loader),
+                "duration_seconds": time.perf_counter() - epoch_started,
+            }
+        )
+        if event_callback:
+            event_callback("training_epoch", result.epoch_metrics[-1])
+    result.duration_seconds = time.perf_counter() - started
+    if event_callback:
+        event_callback(
+            "training_end",
+            {
+                "stage": "client_fd_distillation",
+                "final_loss": result.final_loss,
+                "duration_seconds": result.duration_seconds,
+                "total_examples": result.total_examples,
+                "total_batches": result.total_batches,
+                **gpu_snapshot(),
+            },
+        )
     return result

@@ -65,7 +65,8 @@ clientapp = "ssfl.client_app:app"
 profile = "paper"
 algorithm = "ssfl"
 scenario = 1
-device = "auto"
+device = "cuda"
+resume-from = ""
 
 
 #######################################################################

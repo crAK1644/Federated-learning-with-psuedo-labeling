@@ -36,7 +36,9 @@ def _normalize_key(key: str) -> str:
     return key.replace("-", "_")
 
 
-def build_matrix_configs(matrix_path: Path, configs_dir: Path = CONFIGS_DIR) -> list[tuple[str, ExperimentConfig]]:
+def build_matrix_configs(
+    matrix_path: Path, configs_dir: Path = CONFIGS_DIR
+) -> list[tuple[str, ExperimentConfig]]:
     """Resolve a matrix YAML (``entries: [{name, base_profile, overrides}, ...]``) into validated
     ``(name, ExperimentConfig)`` pairs. Fails fast on any bad entry before any run starts."""
     spec = load_yaml(matrix_path)
@@ -67,6 +69,19 @@ def _dataset_manifest_hash(config: ExperimentConfig) -> str | None:
 def _run_dir(config: ExperimentConfig) -> Path:
     run_id = compute_run_id(config, dataset_manifest_hash=_dataset_manifest_hash(config))
     return config.output_path / run_id
+
+
+def _federation_config(config: ExperimentConfig) -> str:
+    """Flower/Ray resources, including explicit CUDA visibility for ClientApp actors."""
+    fields = [
+        f"num-supernodes={config.num_clients()}",
+        f"client-resources-num-cpus={config.client_num_cpus}",
+        f"client-resources-num-gpus={config.client_num_gpus}",
+        f"init-args-num-cpus={max(1, int(config.max_concurrent_clients * config.client_num_cpus))}",
+    ]
+    if config.client_num_gpus > 0:
+        fields.append("init-args-num-gpus=1")
+    return " ".join(fields)
 
 
 def run_suite(
@@ -103,7 +118,7 @@ def run_suite(
             f'device="{config.device.value}"',
             "--federation-config",
             # no "options." prefix (deprecated/rejected by the installed flwr 1.32.1).
-            f"num-supernodes={config.num_clients()}",
+            _federation_config(config),
             # without --stream, `flwr run` submits to the SuperLink and returns immediately
             # instead of waiting for the run to finish -- --stream is what makes this subprocess
             # call actually block until the run completes (confirmed live: omitting it returned
@@ -119,7 +134,12 @@ def run_suite(
         if proc.returncode != 0 or not summary_path.exists():
             print(f"[run_suite] FAIL  {name} (exit={proc.returncode})")
             results.append(
-                {"name": name, "status": "failed", "run_dir": str(run_dir), "exit_code": proc.returncode}
+                {
+                    "name": name,
+                    "status": "failed",
+                    "run_dir": str(run_dir),
+                    "exit_code": proc.returncode,
+                }
             )
             failed += 1
         else:
@@ -136,8 +156,12 @@ def run_suite(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a declarative SSFL experiment matrix.")
     parser.add_argument("--matrix", type=Path, required=True)
-    parser.add_argument("--resume", action="store_true", help="skip entries whose run already completed")
-    parser.add_argument("--dry-run", action="store_true", help="resolve+write configs without launching flwr run")
+    parser.add_argument(
+        "--resume", action="store_true", help="skip entries whose run already completed"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="resolve+write configs without launching flwr run"
+    )
     args = parser.parse_args()
     sys.exit(run_suite(args.matrix, resume=args.resume, dry_run=args.dry_run))
 

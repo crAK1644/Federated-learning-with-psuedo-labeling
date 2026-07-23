@@ -26,19 +26,29 @@ from ssfl.models import NUM_CLASSES, build_classifier
 from ssfl.protocols import dsfl as dsfl_protocol
 from ssfl.protocols import fl as fl_protocol
 from ssfl.protocols.ssfl import AggregationResult, server_distillation_step
-from ssfl.records import numpy_from_array_record
+from ssfl.records import array_record_from_numpy, numpy_from_array_record
 from ssfl.run_context import RunContext
 from ssfl.seeding import configure_determinism, seed_everything
 from ssfl.strategies.dsfl import DSFLStrategy
 from ssfl.strategies.fd import FDStrategy
 from ssfl.strategies.ssfl import SSFLStrategy
+from ssfl.telemetry import JsonlEventWriter, SystemMonitor, gpu_snapshot
 
 app = ServerApp()
 
 
 @app.main()
 def main(grid: Grid, context: Context) -> None:
-    exp_config = experiment_config_from_run_config(context.run_config)
+    requested_config = experiment_config_from_run_config(context.run_config)
+    if requested_config.resume_from is not None:
+        run_context = RunContext.resume(requested_config.resume_from)
+        exp_config = run_context.config
+        resume_checkpoint = run_context.load_latest_server_checkpoint()
+    else:
+        exp_config = requested_config
+        manifest_path = exp_config.data_path / "dataset_manifest.json"
+        run_context = RunContext.create(exp_config, dataset_manifest_path=manifest_path)
+        resume_checkpoint = None
     device = resolve_device(exp_config.device, exp_config.deterministic)
     configure_determinism(exp_config.deterministic)
 
@@ -46,9 +56,23 @@ def main(grid: Grid, context: Context) -> None:
     manifest_hash = None
     if manifest_path.exists():
         manifest_hash = json.loads(manifest_path.read_text()).get("manifest_hash")
+    metrics_ledger = MetricsLedger(
+        run_dir=run_context.run_dir,
+        load_existing=resume_checkpoint is not None,
+        completed_through=int(resume_checkpoint["round"]) if resume_checkpoint else None,
+    )
 
-    run_context = RunContext.create(exp_config, dataset_manifest_path=manifest_path)
-    metrics_ledger = MetricsLedger()
+    telemetry = JsonlEventWriter(
+        run_context.telemetry_dir / "server.jsonl",
+        run_id=run_context.run_id,
+        attempt_id=run_context.attempt_id,
+        algorithm=exp_config.algorithm.value,
+        scenario=exp_config.scenario.value,
+        role="server",
+    )
+    server_callback = telemetry.callback(phase="server")
+    monitor = SystemMonitor(telemetry, exp_config.system_monitor_interval_seconds)
+    monitor.start()
 
     events_stream = open(run_context.events_path, "a", buffering=1)
     events_logger = bind(
@@ -56,15 +80,39 @@ def main(grid: Grid, context: Context) -> None:
         run_id=run_context.run_id,
         algorithm=exp_config.algorithm.value,
         scenario=exp_config.scenario.value,
+        attempt_id=run_context.attempt_id,
     )
-    log_event(events_logger, "run_start", dataset_hash=manifest_hash)
+    log_event(
+        events_logger,
+        "run_start",
+        dataset_hash=manifest_hash,
+        device=str(device),
+        resume_round=resume_checkpoint["round"] if resume_checkpoint else 0,
+    )
+    telemetry.emit(
+        "run_start",
+        dataset_hash=manifest_hash,
+        resolved_config=exp_config.model_dump(mode="json"),
+        device=str(device),
+        resume_round=resume_checkpoint["round"] if resume_checkpoint else 0,
+        **gpu_snapshot(),
+    )
 
-    train_config = ConfigRecord()
-    evaluate_config = ConfigRecord()
+    shared_config = {
+        "run-id": run_context.run_id,
+        "run-dir": str(run_context.run_dir.resolve()),
+        "attempt-id": run_context.attempt_id,
+        "attempt-dir": str(run_context.attempt_dir.resolve()),
+    }
+    train_config = ConfigRecord(shared_config.copy())
+    evaluate_config = ConfigRecord(shared_config.copy())
+    server_classifier = None
 
     if exp_config.algorithm is Algorithm.fl:
         seed_everything(exp_config.seed)
-        initial_arrays = ArrayRecord(torch_state_dict=build_classifier(exp_config.backbone).state_dict())
+        initial_arrays = ArrayRecord(
+            torch_state_dict=build_classifier(exp_config.backbone).state_dict()
+        )
         strategy = FedAvg(
             fraction_train=1.0,
             fraction_evaluate=1.0,
@@ -83,9 +131,15 @@ def main(grid: Grid, context: Context) -> None:
                 device,
                 batch_size=exp_config.effective_batch_size,
                 seed=exp_config.seed,
+                event_callback=server_callback,
             )
             classification = compute_classification_metrics(
                 eval_metrics["y_true"], eval_metrics["y_pred"], NUM_CLASSES
+            )
+            telemetry.emit(
+                "classification_metrics",
+                round=server_round,
+                **classification.to_dict(include_arrays=True),
             )
             metrics_ledger.record(
                 algorithm=exp_config.algorithm.value,
@@ -94,7 +148,9 @@ def main(grid: Grid, context: Context) -> None:
                 loss=eval_metrics["loss"],
                 metrics=classification,
             )
-            return MetricRecord({"loss": eval_metrics["loss"], "accuracy": eval_metrics["accuracy"]})
+            return MetricRecord(
+                {"loss": eval_metrics["loss"], "accuracy": eval_metrics["accuracy"]}
+            )
 
     elif exp_config.algorithm is Algorithm.ssfl:
         if manifest_hash is None:
@@ -107,6 +163,7 @@ def main(grid: Grid, context: Context) -> None:
             num_open=len(open_dataset),
             num_clients=exp_config.num_clients(),
             voting_mode=exp_config.ssfl_voting_mode,
+            audit_dir=run_context.attempt_dir / "aggregation_audit",
         )
         initial_arrays = ArrayRecord()
         seed_everything(exp_config.seed)
@@ -136,9 +193,15 @@ def main(grid: Grid, context: Context) -> None:
                 lr=exp_config.learning_rate,
                 batch_size=exp_config.effective_batch_size,
                 seed=exp_config.seed,
+                event_callback=server_callback,
             )
             classification = compute_classification_metrics(
                 eval_metrics["y_true"], eval_metrics["y_pred"], NUM_CLASSES
+            )
+            telemetry.emit(
+                "classification_metrics",
+                round=server_round,
+                **classification.to_dict(include_arrays=True),
             )
             metrics_ledger.record(
                 algorithm=exp_config.algorithm.value,
@@ -150,7 +213,11 @@ def main(grid: Grid, context: Context) -> None:
                 valid_rate=float(valid_mask.mean()),
             )
             return MetricRecord(
-                {"loss": eval_metrics["loss"], "accuracy": eval_metrics["accuracy"], "train_loss": train_result.final_loss}
+                {
+                    "loss": eval_metrics["loss"],
+                    "accuracy": eval_metrics["accuracy"],
+                    "train_loss": train_result.final_loss,
+                }
             )
 
     elif exp_config.algorithm is Algorithm.fd:
@@ -183,12 +250,23 @@ def main(grid: Grid, context: Context) -> None:
                 lr=exp_config.learning_rate,
                 batch_size=exp_config.effective_batch_size,
                 seed=exp_config.seed,
+                event_callback=server_callback,
             )
             eval_metrics = dsfl_protocol.server_evaluate(
-                server_classifier, test_dataset, device, batch_size=exp_config.effective_batch_size, seed=exp_config.seed
+                server_classifier,
+                test_dataset,
+                device,
+                batch_size=exp_config.effective_batch_size,
+                seed=exp_config.seed,
+                event_callback=server_callback,
             )
             classification = compute_classification_metrics(
                 eval_metrics["y_true"], eval_metrics["y_pred"], NUM_CLASSES
+            )
+            telemetry.emit(
+                "classification_metrics",
+                round=server_round,
+                **classification.to_dict(include_arrays=True),
             )
             metrics_ledger.record(
                 algorithm=exp_config.algorithm.value,
@@ -199,27 +277,94 @@ def main(grid: Grid, context: Context) -> None:
                 metrics=classification,
             )
             return MetricRecord(
-                {"loss": eval_metrics["loss"], "accuracy": eval_metrics["accuracy"], "train_loss": train_result.final_loss}
+                {
+                    "loss": eval_metrics["loss"],
+                    "accuracy": eval_metrics["accuracy"],
+                    "train_loss": train_result.final_loss,
+                }
             )
 
     else:
         raise ValueError(f"unknown algorithm {exp_config.algorithm}")
 
+    start_round = 1
+    if resume_checkpoint is not None:
+        initial_arrays = array_record_from_numpy(resume_checkpoint["arrays"])
+        if server_classifier is not None and resume_checkpoint["server_model_state"] is not None:
+            server_classifier.load_state_dict(resume_checkpoint["server_model_state"])
+        start_round = int(resume_checkpoint["round"]) + 1
+        telemetry.emit("checkpoint_restored", round=start_round - 1)
+
+    if start_round > exp_config.num_server_rounds:
+        telemetry.emit("run_already_complete", completed_round=start_round - 1)
+        log_event(events_logger, "run_already_complete", completed_round=start_round - 1)
+        monitor.stop()
+        events_stream.close()
+        return
+
+    def on_round_end(server_round, arrays, round_result) -> None:
+        if exp_config.algorithm is Algorithm.fd:
+            values = round_result.evaluate_metrics_clientapp.get(server_round)
+            if values is not None:
+                metrics_ledger.record_precomputed(
+                    algorithm=exp_config.algorithm.value,
+                    scenario=exp_config.scenario.value,
+                    round=server_round,
+                    loss=float(values["loss"]),
+                    accuracy=float(values["accuracy"]),
+                    macro_precision=float(values["macro_precision"]),
+                    macro_recall=float(values["macro_recall"]),
+                    macro_f1=float(values["macro_f1"]),
+                    selected_client=int(values["selected_client"]),
+                )
+        if not run_context.checkpoint_due(server_round):
+            return
+        model_state = (
+            {key: value.detach().cpu() for key, value in server_classifier.state_dict().items()}
+            if server_classifier is not None
+            else None
+        )
+        checkpoint_path = run_context.save_server_checkpoint(
+            server_round,
+            numpy_from_array_record(arrays),
+            model_state,
+            extra={"attempt_id": run_context.attempt_id},
+        )
+        telemetry.emit("checkpoint_written", round=server_round, path=str(checkpoint_path))
+
     tracked_strategy = CommsTrackingStrategy(
-        strategy, exp_config.algorithm.value, exp_config.scenario.value, logger=events_logger
+        strategy,
+        exp_config.algorithm.value,
+        exp_config.scenario.value,
+        logger=events_logger,
+        telemetry=telemetry,
+        ledger_path=run_context.run_dir / "communication.parquet",
+        attempt_id=run_context.attempt_id,
+        load_existing=resume_checkpoint is not None,
+        completed_through=start_round - 1 if resume_checkpoint is not None else None,
+        start_round=start_round,
+        round_end_callback=on_round_end,
     )
-    result = tracked_strategy.start(
-        grid,
-        initial_arrays,
-        num_rounds=exp_config.num_server_rounds,
-        train_config=train_config,
-        evaluate_config=evaluate_config,
-        evaluate_fn=evaluate_fn,
-    )
+    try:
+        result = tracked_strategy.start(
+            grid,
+            initial_arrays,
+            num_rounds=exp_config.num_server_rounds,
+            train_config=train_config,
+            evaluate_config=evaluate_config,
+            evaluate_fn=evaluate_fn,
+        )
+    finally:
+        monitor.stop()
     tracked_strategy.ledger.write_parquet(run_context.run_dir / "communication.parquet")
     metrics_ledger.write(run_context.run_dir)
 
-    final_round = max(result.evaluate_metrics_serverapp) if result.evaluate_metrics_serverapp else None
+    final_metrics_by_round = (
+        result.evaluate_metrics_clientapp
+        if exp_config.algorithm is Algorithm.fd
+        else result.evaluate_metrics_serverapp
+    )
+    final_round = max(final_metrics_by_round) if final_metrics_by_round else None
     run_context.write_summary(
         {
             "run_id": run_context.run_id,
@@ -228,9 +373,14 @@ def main(grid: Grid, context: Context) -> None:
             "num_rounds": exp_config.num_server_rounds,
             "final_round": final_round,
             "final_centralized_metrics": (
-                dict(result.evaluate_metrics_serverapp[final_round].items()) if final_round is not None else None
+                dict(final_metrics_by_round[final_round].items())
+                if final_round is not None
+                else None
             ),
+            "attempt_id": run_context.attempt_id,
+            "resumed_from_round": start_round - 1,
         }
     )
     log_event(events_logger, "run_end", final_round=final_round)
+    telemetry.emit("run_end", final_round=final_round, **gpu_snapshot())
     events_stream.close()

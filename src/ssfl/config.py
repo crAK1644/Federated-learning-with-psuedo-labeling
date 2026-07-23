@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import subprocess
 from datetime import datetime, timezone
@@ -179,7 +180,9 @@ class ExperimentConfig(BaseModel):
     num_server_rounds: int = Field(default=200, alias="num-server-rounds")
     local_epochs: int = 5
     batch_size: int = 80
-    paper_text_batch: bool = False  # True => use batch size 100 (Section V-C compatibility override)
+    paper_text_batch: bool = (
+        False  # True => use batch size 100 (Section V-C compatibility override)
+    )
     learning_rate: float = 1e-4
     device: DeviceKind = DeviceKind.auto
     deterministic: bool = True
@@ -198,6 +201,8 @@ class ExperimentConfig(BaseModel):
     checkpoint_interval: int = 10
     checkpoint_rounds: tuple[int, ...] = (10, 50, 100, 150, 200)
     logging_interval: int = 1
+    log_every_batch: bool = True
+    system_monitor_interval_seconds: float = 1.0
     resume_from: Path | None = None
 
     # --- resources (simulation) -----------------------------------------
@@ -250,6 +255,22 @@ class ExperimentConfig(BaseModel):
             raise ValueError(
                 f"checkpoint_rounds {bad} exceed num_server_rounds={self.num_server_rounds}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_cuda_resources(self) -> "ExperimentConfig":
+        if self.device == DeviceKind.cuda and self.client_num_gpus <= 0:
+            raise ValueError("device=cuda requires client_num_gpus > 0 so Ray exposes the GPU")
+        if self.client_num_gpus < 0 or self.client_num_gpus > 1:
+            raise ValueError("client_num_gpus must be in [0, 1]")
+        if self.max_concurrent_clients < 1:
+            raise ValueError("max_concurrent_clients must be >= 1")
+        if self.checkpoint_interval < 1:
+            raise ValueError("checkpoint_interval must be >= 1")
+        if self.logging_interval < 1:
+            raise ValueError("logging_interval must be >= 1")
+        if self.system_monitor_interval_seconds <= 0:
+            raise ValueError("system_monitor_interval_seconds must be > 0")
         return self
 
     def config_hash(self) -> str:
@@ -328,9 +349,16 @@ def experiment_config_from_run_config(run_config: dict[str, Any]) -> ExperimentC
     overrides).
     """
     overrides = {_normalize_key(k): v for k, v in run_config.items()}
+    # TOML has no null value, so pyproject exposes an empty-string invocation default. Treat it as
+    # absent while preserving a real CLI path (`resume-from="artifacts/runs/<run-id>"`).
+    if overrides.get("resume_from") == "":
+        overrides.pop("resume_from")
     profile = overrides.get("profile", "paper")
     repo_root = Path(__file__).resolve().parent.parent.parent
-    for candidate in (repo_root / "configs" / f"{profile}.yaml", repo_root / "artifacts" / "generated_configs" / f"{profile}.yaml"):
+    for candidate in (
+        repo_root / "configs" / f"{profile}.yaml",
+        repo_root / "artifacts" / "generated_configs" / f"{profile}.yaml",
+    ):
         if candidate.exists():
             return load_experiment_config(candidate, overrides)
     return ExperimentConfig.model_validate(overrides)
@@ -371,15 +399,69 @@ def capture_environment_snapshot() -> dict[str, Any]:
         except Exception:
             return None
 
+    cuda_devices = []
+    if torch.cuda.is_available():
+        for index in range(torch.cuda.device_count()):
+            properties = torch.cuda.get_device_properties(index)
+            cuda_devices.append(
+                {
+                    "index": index,
+                    "name": properties.name,
+                    "total_memory_bytes": properties.total_memory,
+                    "compute_capability": f"{properties.major}.{properties.minor}",
+                    "multi_processor_count": properties.multi_processor_count,
+                }
+            )
+    try:
+        git_dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            ).stdout.strip()
+        )
+    except Exception:
+        git_dirty = None
+    try:
+        nvidia_smi = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version,name,uuid", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+    except Exception:
+        nvidia_smi = None
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        physical_pages = os.sysconf("SC_PHYS_PAGES")
+        ram_bytes = int(page_size * physical_pages)
+    except (AttributeError, ValueError, OSError):
+        ram_bytes = None
+
     return {
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "machine": platform.machine(),
         "processor": platform.processor(),
+        "cpu_count": os.cpu_count(),
+        "ram_bytes": ram_bytes,
         "git_commit": _git_commit(),
+        "git_dirty": git_dirty,
         "torch_version": torch.__version__,
         "cuda_available": torch.cuda.is_available(),
+        "cuda_version": torch.version.cuda,
+        "cudnn_version": torch.backends.cudnn.version(),
+        "cuda_devices": cuda_devices,
+        "nvidia_smi": nvidia_smi,
+        "deterministic_algorithms_enabled": torch.are_deterministic_algorithms_enabled(),
+        "cudnn_deterministic": torch.backends.cudnn.deterministic,
+        "cudnn_benchmark": torch.backends.cudnn.benchmark,
+        "float32_matmul_precision": torch.get_float32_matmul_precision(),
+        "cublas_workspace_config": os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
         "mps_available": torch.backends.mps.is_available(),
         "dependency_versions": {
             name: _version(name)

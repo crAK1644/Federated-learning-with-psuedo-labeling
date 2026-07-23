@@ -32,15 +32,62 @@ uv run python -m ssfl.data.prepare_data --input data --output artifacts/data --s
 uv run pytest -q                    # unit + protocol/security tests (~45s)
 uv run pytest -m slow -q            # + real flwr simulations and deployment processes (minutes)
 
-uv run flwr run . --run-config 'profile="smoke" algorithm="ssfl" scenario=1 device="cpu"'
+uv run flwr run . \
+  --run-config 'profile="smoke" algorithm="ssfl" scenario=1 device="cpu"' \
+  --federation-config 'num-supernodes=27 client-resources-num-cpus=1 client-resources-num-gpus=0 init-args-num-cpus=8' \
+  --stream
 
 uv run python -m ssfl.experiments.run_suite --matrix configs/experiments_smoke.yaml
 uv run python -m ssfl.reporting.build_report --runs artifacts/runs --output artifacts/report
 ```
 
 `algorithm` is one of `ssfl`/`fl`/`fd`/`dsfl`; `scenario` is `1` (27 clients), `2`, or `3` (89
-clients each). Swap `profile="smoke"` for `profile="paper"` for the real 200-round runs — those are
-configured here but gated on GPU hardware, not executed in this repo (see `REPRODUCIBILITY.md`).
+clients each).
+
+## RTX 3090 paper runs
+
+The canonical profile uses CUDA, deterministic kernels, 200 rounds, 5 local epochs, Adam at
+`1e-4`, batch size 80, checkpoints every round, and eight concurrent actors at `0.125` GPU each:
+
+```bash
+uv run flwr run . \
+  --run-config 'profile="paper" algorithm="ssfl" scenario=1 device="cuda"' \
+  --federation-config 'num-supernodes=27 client-resources-num-cpus=1 client-resources-num-gpus=0.125 init-args-num-cpus=8 init-args-num-gpus=1' \
+  --stream
+```
+
+For scenarios 2/3 use `scenario=2` or `3` and `num-supernodes=89`. To execute the full paper
+matrix—including all three scenarios for every ablation, threshold, and label-representation
+study—run:
+
+```bash
+uv run python -m ssfl.experiments.run_suite --matrix configs/experiments.yaml --resume
+```
+
+To resume one interrupted run from its last completed round, add
+`resume-from="artifacts/runs/<run-id>"` to `--run-config` while keeping the original profile,
+algorithm, scenario, device, and federation configuration.
+
+## Exhaustive artifacts
+
+Every batch, epoch, client phase, aggregation phase, communication round, evaluation, checkpoint,
+and one-second GPU/system sample is flushed during the run. Each deterministic run directory has:
+
+```text
+metrics.parquet                 per-round macro/micro/weighted metrics
+per_class_metrics.parquet       per-class precision/recall/F1/support
+confusion_matrices.npz          raw confusion matrix per round
+communication.parquet          every message, tensor shape/dtype, real/wire/paper bytes
+checkpoints/                    server and per-client checkpoint per paper round
+attempts/<attempt-id>/
+  events.jsonl                  compact server aggregation stream
+  telemetry/server.jsonl        rounds, phases, GPU/system, evaluation details
+  telemetry/clients/*.jsonl     every client batch/epoch/prediction/evaluation
+  aggregation_audit/*.npz       full SSFL vote counts, participation, labels, masks
+```
+
+Raw private samples, model weights, gradients, and secret values are deliberately not copied into
+JSON logs. Checkpoints contain model state and must be protected as sensitive artifacts.
 
 ## Real (non-simulation) deployment
 

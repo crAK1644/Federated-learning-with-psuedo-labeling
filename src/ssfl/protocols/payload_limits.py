@@ -40,24 +40,29 @@ def _check_range(name: str, arr: np.ndarray, low: float, high: float) -> None:
     _require(bool(((arr >= low) & (arr <= high)).all()), f"{name}: values outside [{low}, {high}]")
 
 
-def validate_ssfl_proposal_arrays(arrays: dict[str, np.ndarray], num_open: int, num_classes: int) -> None:
-    """SSFL proposal reply: ``confidences`` always, plus exactly one of ``pseudo_labels``
-    (hard) / ``soft_probs`` (soft), matching ``ssfl_label_representation``."""
-    _require("confidences" in arrays, "missing 'confidences'")
-    confidences = arrays["confidences"]
-    _check_shape("confidences", confidences, (num_open,))
-    _check_dtype_kind("confidences", confidences, "f")
-    _check_finite("confidences", confidences)
-    _check_range("confidences", confidences, -_PROB_TOL, 1 + _PROB_TOL)
+def validate_ssfl_proposal_arrays(
+    arrays: dict[str, np.ndarray], num_open: int, num_classes: int
+) -> None:
+    """Paper Algorithm 1 proposal: exactly one hard-label or soft-label payload.
 
+    Confidence scores are strictly client-local discriminator/audit data and must not cross the
+    wire in the canonical protocol.
+    """
+    _require("confidences" not in arrays, "confidences are client-local and forbidden on wire")
     pseudo_labels = arrays.get("pseudo_labels")
     soft_probs = arrays.get("soft_probs")
-    _require((pseudo_labels is None) != (soft_probs is None), "exactly one of pseudo_labels/soft_probs required")
+    _require(
+        (pseudo_labels is None) != (soft_probs is None),
+        "exactly one of pseudo_labels/soft_probs required",
+    )
 
     if pseudo_labels is not None:
         _check_shape("pseudo_labels", pseudo_labels, (num_open,))
         _check_dtype_kind("pseudo_labels", pseudo_labels, "i")
-        _require(bool(((pseudo_labels >= -1) & (pseudo_labels < num_classes)).all()), "pseudo_labels: value outside [-1, num_classes)")
+        _require(
+            bool(((pseudo_labels >= -1) & (pseudo_labels < num_classes)).all()),
+            "pseudo_labels: value outside [-1, num_classes)",
+        )
 
     if soft_probs is not None:
         _check_shape("soft_probs", soft_probs, (num_open, num_classes))
@@ -66,11 +71,16 @@ def validate_ssfl_proposal_arrays(arrays: dict[str, np.ndarray], num_open: int, 
         _check_range("soft_probs", soft_probs, -_PROB_TOL, 1 + _PROB_TOL)
         row_sums = soft_probs.sum(axis=1)
         # a legitimate row is either the "unfamiliar" all-zero sentinel or a softmax (~sums to 1).
-        _require(bool(((row_sums < _PROB_TOL) | (np.abs(row_sums - 1) < _PROB_TOL)).all()), "soft_probs: rows must sum to ~1 or be all-zero")
+        _require(
+            bool(((row_sums < _PROB_TOL) | (np.abs(row_sums - 1) < _PROB_TOL)).all()),
+            "soft_probs: rows must sum to ~1 or be all-zero",
+        )
 
 
 def validate_fd_arrays(arrays: dict[str, np.ndarray], num_classes: int) -> None:
-    _require("class_probs" in arrays and "class_present" in arrays, "missing class_probs/class_present")
+    _require(
+        "class_probs" in arrays and "class_present" in arrays, "missing class_probs/class_present"
+    )
     class_probs = arrays["class_probs"]
     class_present = arrays["class_present"]
     _check_shape("class_probs", class_probs, (num_classes, num_classes))
@@ -80,12 +90,18 @@ def validate_fd_arrays(arrays: dict[str, np.ndarray], num_classes: int) -> None:
 
     _check_shape("class_present", class_present, (num_classes,))
     _check_dtype_kind("class_present", class_present, "i")
-    _require(bool(((class_present == 0) | (class_present == 1)).all()), "class_present: values must be 0 or 1")
+    _require(
+        bool(((class_present == 0) | (class_present == 1)).all()),
+        "class_present: values must be 0 or 1",
+    )
 
     present_rows = class_probs[class_present.astype(bool)]
     if len(present_rows):
         row_sums = present_rows.sum(axis=1)
-        _require(bool((np.abs(row_sums - 1) < _PROB_TOL).all()), "class_probs: present-class rows must sum to ~1")
+        _require(
+            bool((np.abs(row_sums - 1) < _PROB_TOL).all()),
+            "class_probs: present-class rows must sum to ~1",
+        )
 
 
 def validate_dsfl_arrays(arrays: dict[str, np.ndarray], num_open: int, num_classes: int) -> None:
@@ -100,15 +116,15 @@ def validate_dsfl_arrays(arrays: dict[str, np.ndarray], num_open: int, num_class
 
 
 if __name__ == "__main__":
-    good = {"confidences": np.array([0.9, 0.1], dtype=np.float32), "pseudo_labels": np.array([2, -1], dtype=np.int64)}
+    good = {"pseudo_labels": np.array([2, -1], dtype=np.int8)}
     validate_ssfl_proposal_arrays(good, num_open=2, num_classes=11)  # must not raise
     try:
-        validate_ssfl_proposal_arrays({"confidences": np.array([0.9], dtype=np.float32)}, num_open=2, num_classes=11)
+        validate_ssfl_proposal_arrays({}, num_open=2, num_classes=11)
         raise SystemExit("expected ProtocolError for wrong shape")
     except ProtocolError:
         pass
     try:
-        bad = {"confidences": np.array([0.9, 5.0], dtype=np.float32), "pseudo_labels": np.array([2, -1], dtype=np.int64)}
+        bad = {"pseudo_labels": np.array([2, 99], dtype=np.int8)}
         validate_ssfl_proposal_arrays(bad, num_open=2, num_classes=11)
         raise SystemExit("expected ProtocolError for out-of-range confidence")
     except ProtocolError:

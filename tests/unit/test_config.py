@@ -7,6 +7,7 @@ from ssfl.config import (
     ExperimentConfig,
     LabelRepresentation,
     VotingMode,
+    experiment_config_from_run_config,
     load_experiment_config,
     load_yaml,
     parse_run_config_string,
@@ -69,6 +70,19 @@ def test_run_config_string_overrides_profile() -> None:
     assert cfg.scenario.value == 2
     assert cfg.num_server_rounds == 5
     assert cfg.seed == 99
+
+
+def test_empty_resume_default_is_treated_as_none() -> None:
+    cfg = experiment_config_from_run_config(
+        {
+            "profile": "smoke",
+            "algorithm": "ssfl",
+            "scenario": 1,
+            "device": "cpu",
+            "resume-from": "",
+        }
+    )
+    assert cfg.resume_from is None
 
 
 def test_num_clients_matches_scenario() -> None:

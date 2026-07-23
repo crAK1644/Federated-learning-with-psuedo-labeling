@@ -2,76 +2,69 @@ import numpy as np
 import pytest
 
 from ssfl.protocols.message import ProtocolError
-from ssfl.protocols.payload_limits import validate_dsfl_arrays, validate_fd_arrays, validate_ssfl_proposal_arrays
+from ssfl.protocols.payload_limits import (
+    validate_dsfl_arrays,
+    validate_fd_arrays,
+    validate_ssfl_proposal_arrays,
+)
 
 NUM_CLASSES = 11
 NUM_OPEN = 4
 
 
-def _confidences(values):
-    return np.array(values, dtype=np.float32)
-
-
 def test_ssfl_hard_labels_accepted():
-    arrays = {
-        "confidences": _confidences([0.9, 0.5, 0.1, 0.99]),
-        "pseudo_labels": np.array([2, -1, 0, 10], dtype=np.int64),
-    }
-    validate_ssfl_proposal_arrays(arrays, num_open=NUM_OPEN, num_classes=NUM_CLASSES)  # must not raise
+    arrays = {"pseudo_labels": np.array([2, -1, 0, 10], dtype=np.int8)}
+    validate_ssfl_proposal_arrays(
+        arrays, num_open=NUM_OPEN, num_classes=NUM_CLASSES
+    )  # must not raise
 
 
 def test_ssfl_soft_probs_accepted():
     row = np.zeros(NUM_CLASSES, dtype=np.float32)
     row[0] = 1.0
     soft = np.stack([row, np.zeros(NUM_CLASSES, dtype=np.float32), row, row])
-    arrays = {"confidences": _confidences([0.9, 0.5, 0.1, 0.99]), "soft_probs": soft.astype(np.float32)}
-    validate_ssfl_proposal_arrays(arrays, num_open=NUM_OPEN, num_classes=NUM_CLASSES)  # must not raise
+    arrays = {"soft_probs": soft.astype(np.float32)}
+    validate_ssfl_proposal_arrays(
+        arrays, num_open=NUM_OPEN, num_classes=NUM_CLASSES
+    )  # must not raise
 
 
 def test_ssfl_rejects_wrong_shape():
-    arrays = {"confidences": _confidences([0.9, 0.5]), "pseudo_labels": np.array([2, -1], dtype=np.int64)}
+    arrays = {"pseudo_labels": np.array([2, -1], dtype=np.int8)}
     with pytest.raises(ProtocolError):
         validate_ssfl_proposal_arrays(arrays, num_open=NUM_OPEN, num_classes=NUM_CLASSES)
 
 
-def test_ssfl_rejects_out_of_range_confidence():
+def test_ssfl_rejects_noncanonical_confidence_upload():
     arrays = {
-        "confidences": _confidences([0.9, 0.5, 5.0, 0.1]),
-        "pseudo_labels": np.array([2, -1, 0, 1], dtype=np.int64),
+        "confidences": np.array([0.9, 0.5, 0.4, 0.1], dtype=np.float32),
+        "pseudo_labels": np.array([2, -1, 0, 1], dtype=np.int8),
     }
     with pytest.raises(ProtocolError):
         validate_ssfl_proposal_arrays(arrays, num_open=NUM_OPEN, num_classes=NUM_CLASSES)
 
 
 def test_ssfl_rejects_out_of_range_pseudo_label():
-    arrays = {
-        "confidences": _confidences([0.9, 0.5, 0.1, 0.2]),
-        "pseudo_labels": np.array([2, -1, 99, 1], dtype=np.int64),
-    }
+    arrays = {"pseudo_labels": np.array([2, -1, 99, 1], dtype=np.int16)}
     with pytest.raises(ProtocolError):
         validate_ssfl_proposal_arrays(arrays, num_open=NUM_OPEN, num_classes=NUM_CLASSES)
 
 
 def test_ssfl_rejects_both_or_neither_label_representation():
-    labels = np.array([2, -1, 0, 1], dtype=np.int64)
+    labels = np.array([2, -1, 0, 1], dtype=np.int8)
     soft = np.zeros((NUM_OPEN, NUM_CLASSES), dtype=np.float32)
     with pytest.raises(ProtocolError):
         validate_ssfl_proposal_arrays(
-            {"confidences": _confidences([0.9, 0.5, 0.1, 0.2]), "pseudo_labels": labels, "soft_probs": soft},
+            {"pseudo_labels": labels, "soft_probs": soft},
             num_open=NUM_OPEN,
             num_classes=NUM_CLASSES,
         )
     with pytest.raises(ProtocolError):
-        validate_ssfl_proposal_arrays(
-            {"confidences": _confidences([0.9, 0.5, 0.1, 0.2])}, num_open=NUM_OPEN, num_classes=NUM_CLASSES
-        )
+        validate_ssfl_proposal_arrays({}, num_open=NUM_OPEN, num_classes=NUM_CLASSES)
 
 
 def test_ssfl_rejects_nan():
-    arrays = {
-        "confidences": _confidences([0.9, np.nan, 0.1, 0.2]),
-        "pseudo_labels": np.array([2, -1, 0, 1], dtype=np.int64),
-    }
+    arrays = {"soft_probs": np.full((NUM_OPEN, NUM_CLASSES), np.nan, dtype=np.float32)}
     with pytest.raises(ProtocolError):
         validate_ssfl_proposal_arrays(arrays, num_open=NUM_OPEN, num_classes=NUM_CLASSES)
 
@@ -112,7 +105,9 @@ def test_fd_rejects_wrong_shape():
 
 def test_dsfl_accepts_row_stochastic_probs():
     probs = np.full((NUM_OPEN, NUM_CLASSES), 1.0 / NUM_CLASSES, dtype=np.float32)
-    validate_dsfl_arrays({"probs": probs}, num_open=NUM_OPEN, num_classes=NUM_CLASSES)  # must not raise
+    validate_dsfl_arrays(
+        {"probs": probs}, num_open=NUM_OPEN, num_classes=NUM_CLASSES
+    )  # must not raise
 
 
 def test_dsfl_rejects_row_not_summing_to_one():

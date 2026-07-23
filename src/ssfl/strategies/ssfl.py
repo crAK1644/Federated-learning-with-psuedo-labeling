@@ -1,13 +1,16 @@
 """Custom ``Strategy`` for SSFL: proposal (train exchange) -> majority vote -> broadcast ->
 distillation (evaluate exchange), matching ``protocols/ssfl.py`` exactly.
 
-Only pseudo-labels/confidences (client->server) and global_labels/valid_mask (server->client)
+Only pseudo-labels (client->server) and global_labels/valid_mask (server->client)
 cross the wire -- never model parameters, matching the privacy boundary tested in M4.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
+
+import numpy as np
 
 from flwr.common import ArrayRecord, ConfigRecord, Message, MessageType, MetricRecord, RecordDict
 from flwr.serverapp import Grid
@@ -30,12 +33,14 @@ class SSFLStrategy(Strategy):
         num_open: int,
         num_clients: int,
         voting_mode: VotingMode = VotingMode.enabled,
+        audit_dir: Path | None = None,
     ) -> None:
         self.scenario = scenario
         self.dataset_manifest_hash = dataset_manifest_hash
         self.num_open = num_open
         self.num_clients = num_clients
         self.voting_mode = voting_mode
+        self.audit_dir = audit_dir
         self._current_node_ids: list[int] = []
 
     def summary(self) -> None:
@@ -90,7 +95,9 @@ class SSFLStrategy(Strategy):
 
             arrays = numpy_from_array_record(msg.content["arrays"])
             try:
-                validate_ssfl_proposal_arrays(arrays, num_open=self.num_open, num_classes=NUM_CLASSES)
+                validate_ssfl_proposal_arrays(
+                    arrays, num_open=self.num_open, num_classes=NUM_CLASSES
+                )
             except ProtocolError:
                 continue
             metrics = msg.content["metrics"]
@@ -101,7 +108,7 @@ class SSFLStrategy(Strategy):
                         client_id=sender_id,
                         pseudo_labels=arrays.get("pseudo_labels"),
                         soft_probs=arrays.get("soft_probs"),
-                        confidences=arrays["confidences"],
+                        confidences=None,
                         threshold=float(metrics["threshold"]),
                         classifier_loss=float(metrics["classifier_loss"]),
                         discriminator_loss=float(metrics["discriminator_loss"]),
@@ -117,8 +124,27 @@ class SSFLStrategy(Strategy):
             result = aggregate_votes(proposals, num_open=self.num_open, num_classes=NUM_CLASSES)
         else:
             result = aggregate_soft(proposals, num_open=self.num_open, num_classes=NUM_CLASSES)
+        if self.audit_dir is not None:
+            self.audit_dir.mkdir(parents=True, exist_ok=True)
+            audit_path = self.audit_dir / f"ssfl_aggregation_round_{server_round}.npz"
+            audit_tmp = audit_path.with_suffix(".tmp.npz")
+            np.savez_compressed(
+                audit_tmp,
+                votes_per_class=result.votes_per_class,
+                participating_counts=result.participating_counts,
+                global_labels=result.global_labels.astype(np.int8),
+                valid_mask=result.valid_mask,
+            )
+            audit_tmp.replace(audit_path)
+        valid_votes = result.votes_per_class[result.valid_mask]
+        if len(valid_votes):
+            sorted_votes = np.sort(valid_votes, axis=1)
+            vote_margins = sorted_votes[:, -1] - sorted_votes[:, -2]
+        else:
+            vote_margins = np.array([], dtype=np.int64)
+        label_counts = np.bincount(result.global_labels[result.valid_mask], minlength=NUM_CLASSES)
         arrays_out = array_record_from_numpy(
-            {"global_labels": result.global_labels, "valid_mask": result.valid_mask}
+            {"global_labels": result.global_labels.astype("int8"), "valid_mask": result.valid_mask}
         )
         metrics_out = MetricRecord(
             {
@@ -127,6 +153,15 @@ class SSFLStrategy(Strategy):
                 "all_abstain_count": result.all_abstain_count,
                 "num_proposals": len(proposals),
                 "rejected_count": rejected_count,
+                "participating_min": int(result.participating_counts.min()),
+                "participating_mean": float(result.participating_counts.mean()),
+                "participating_max": int(result.participating_counts.max()),
+                "vote_margin_mean": float(vote_margins.mean()) if len(vote_margins) else 0.0,
+                "vote_margin_min": int(vote_margins.min()) if len(vote_margins) else 0,
+                **{
+                    f"global_class_{index}_count": int(count)
+                    for index, count in enumerate(label_counts)
+                },
             }
         )
         return arrays_out, metrics_out
@@ -136,12 +171,17 @@ class SSFLStrategy(Strategy):
     ) -> Iterable[Message]:
         config["server-round"] = server_round
         record = RecordDict({"arrays": arrays, "config": config})
-        return [Message(record, message_type=MessageType.EVALUATE, dst_node_id=n) for n in self._current_node_ids]
+        return [
+            Message(record, message_type=MessageType.EVALUATE, dst_node_id=n)
+            for n in self._current_node_ids
+        ]
 
     def aggregate_evaluate(self, server_round: int, replies: Iterable[Message]):
         valid_senders = frozenset(str(n) for n in self._current_node_ids)
         contents = [
-            msg.content for msg in replies if not msg.has_error() and str(msg.metadata.src_node_id) in valid_senders
+            msg.content
+            for msg in replies
+            if not msg.has_error() and str(msg.metadata.src_node_id) in valid_senders
         ]
         if not contents:
             return None

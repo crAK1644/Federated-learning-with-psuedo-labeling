@@ -7,6 +7,7 @@ from ssfl.reporting.build_report import (
     _ablation_label,
     _comm_at_accuracy,
     _cumulative_comm_mb,
+    _cumulative_paper_comm_mb,
     _label_study_label,
     _threshold_label,
     build_report,
@@ -35,7 +36,9 @@ def _make_run(tmp_path, run_id, config_overrides, metrics_rows, comms_rows=None,
     config = {**BASE_CONFIG, **config_overrides}
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config))
     (run_dir / "summary.json").write_text(
-        json.dumps({"final_round": final_round if final_round is not None else metrics_rows[-1]["round"]})
+        json.dumps(
+            {"final_round": final_round if final_round is not None else metrics_rows[-1]["round"]}
+        )
     )
     pd.DataFrame(metrics_rows).to_parquet(run_dir / "metrics.parquet", index=False)
     if comms_rows:
@@ -43,41 +46,76 @@ def _make_run(tmp_path, run_id, config_overrides, metrics_rows, comms_rows=None,
     return run_dir
 
 
-def _comm_row(round_n, logical_bytes):
+def _comm_row(round_n, logical_bytes, *, paper_bytes=None, direction="client_to_server"):
     return {
         "algorithm": "ssfl",
         "scenario": 1,
         "round": round_n,
         "phase": "train",
-        "direction": "client_to_server",
+        "direction": direction,
         "logical_bytes": logical_bytes,
+        "paper_bytes": logical_bytes if paper_bytes is None else paper_bytes,
         "serialized_bytes": logical_bytes + 10,
     }
 
 
 def test_cumulative_comm_mb_sums_and_accumulates_across_rounds():
-    comms = pd.DataFrame([_comm_row(1, 1024 * 1024), _comm_row(1, 1024 * 1024), _comm_row(2, 1024 * 1024)])
+    comms = pd.DataFrame(
+        [_comm_row(1, 1024 * 1024), _comm_row(1, 1024 * 1024), _comm_row(2, 1024 * 1024)]
+    )
     cum = _cumulative_comm_mb(comms)
     assert cum[1] == 2.0
     assert cum[2] == 3.0
 
 
+def test_paper_comm_uses_mean_client_uplink_and_ignores_downlink():
+    comms = pd.DataFrame(
+        [
+            _comm_row(1, 999, paper_bytes=1024 * 1024),
+            _comm_row(1, 999, paper_bytes=3 * 1024 * 1024),
+            _comm_row(1, 9 * 1024 * 1024, direction="server_to_client"),
+            _comm_row(2, 999, paper_bytes=2 * 1024 * 1024),
+        ]
+    )
+    cum = _cumulative_paper_comm_mb(comms)
+    assert cum[1] == 2.0
+    assert cum[2] == 4.0
+
+
 def test_comm_at_accuracy_returns_first_round_crossing_threshold():
-    metrics = pd.DataFrame([{"round": 1, "accuracy": 0.3}, {"round": 2, "accuracy": 0.6}, {"round": 3, "accuracy": 0.9}])
+    metrics = pd.DataFrame(
+        [
+            {"round": 1, "accuracy": 0.3},
+            {"round": 2, "accuracy": 0.6},
+            {"round": 3, "accuracy": 0.9},
+        ]
+    )
     cum_mb = pd.Series({1: 1.0, 2: 2.0, 3: 3.0})
     assert _comm_at_accuracy(metrics, cum_mb, 0.5) == 2.0
     assert _comm_at_accuracy(metrics, cum_mb, 0.99) is None
 
 
 def test_ablation_label_covers_all_five_combinations():
-    assert _ablation_label({"ssfl_discriminator_mode": "enabled", "ssfl_voting_mode": "enabled"}) == "Ours"
-    assert _ablation_label({"ssfl_discriminator_mode": "disabled", "ssfl_voting_mode": "enabled"}) == "Ours w/o Discriminating"
-    assert _ablation_label({"ssfl_discriminator_mode": "enabled", "ssfl_voting_mode": "disabled"}) == "Ours w/o Voting"
+    assert (
+        _ablation_label({"ssfl_discriminator_mode": "enabled", "ssfl_voting_mode": "enabled"})
+        == "Ours"
+    )
+    assert (
+        _ablation_label({"ssfl_discriminator_mode": "disabled", "ssfl_voting_mode": "enabled"})
+        == "Ours w/o Discriminating"
+    )
+    assert (
+        _ablation_label({"ssfl_discriminator_mode": "enabled", "ssfl_voting_mode": "disabled"})
+        == "Ours w/o Voting"
+    )
     assert (
         _ablation_label({"ssfl_discriminator_mode": "disabled", "ssfl_voting_mode": "disabled"})
         == "Ours w/o Discriminating and Voting"
     )
-    assert _ablation_label({"ssfl_discriminator_mode": "simple_filter", "ssfl_voting_mode": "enabled"}) == "Simply Filtering"
+    assert (
+        _ablation_label({"ssfl_discriminator_mode": "simple_filter", "ssfl_voting_mode": "enabled"})
+        == "Simply Filtering"
+    )
 
 
 def test_threshold_label_formats_fixed_and_median():
@@ -87,7 +125,12 @@ def test_threshold_label_formats_fixed_and_median():
 
 def test_label_study_label_hard_vs_soft():
     assert _label_study_label({"ssfl_label_representation": "hard"}) == "Hard Label"
-    assert _label_study_label({"ssfl_label_representation": "soft", "ssfl_soft_label_round_decimals": 4}) == "Soft Label w. 4f"
+    assert (
+        _label_study_label(
+            {"ssfl_label_representation": "soft", "ssfl_soft_label_round_decimals": 4}
+        )
+        == "Soft Label w. 4f"
+    )
 
 
 def test_build_table_ii_populates_matched_cell_and_leaves_others_blank(tmp_path):
@@ -172,7 +215,12 @@ def test_build_report_end_to_end_writes_tables_and_report(tmp_path):
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
     metrics_rows = [{"round": 1, "accuracy": 0.5, "macro_f1": 0.4, "macro_precision": 0.5}]
-    _make_run(runs_dir, "ssfl-run", {"profile": "ssfl_cnn_s1", "algorithm": "ssfl", "backbone": "cnn", "scenario": 1}, metrics_rows)
+    _make_run(
+        runs_dir,
+        "ssfl-run",
+        {"profile": "ssfl_cnn_s1", "algorithm": "ssfl", "backbone": "cnn", "scenario": 1},
+        metrics_rows,
+    )
 
     output_dir = tmp_path / "report"
     build_report(runs_dir, output_dir, data_dir=tmp_path / "no_such_data_dir")

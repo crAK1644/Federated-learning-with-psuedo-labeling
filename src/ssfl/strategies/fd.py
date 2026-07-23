@@ -10,13 +10,18 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from flwr.common import ArrayRecord, ConfigRecord, Message, MessageType, RecordDict
+from flwr.common import ArrayRecord, ConfigRecord, Message, MessageType, MetricRecord, RecordDict
 from flwr.serverapp import Grid
 from flwr.serverapp.strategy import Strategy
 from flwr.serverapp.strategy.strategy_utils import aggregate_metricrecords, sample_nodes
 
 from ssfl.models import NUM_CLASSES
-from ssfl.protocols.fd import ClassLogitUpload, FDAggregation, aggregate_class_logits, leave_self_out_targets
+from ssfl.protocols.fd import (
+    ClassLogitUpload,
+    FDAggregation,
+    aggregate_class_logits,
+    leave_self_out_targets,
+)
 from ssfl.protocols.message import ProtocolError
 from ssfl.protocols.payload_limits import validate_fd_arrays
 from ssfl.records import array_record_from_numpy, numpy_from_array_record
@@ -79,7 +84,10 @@ class FDStrategy(Strategy):
         self._last_uploads = {u.client_id: u for u in uploads}
 
         arrays_out = array_record_from_numpy(
-            {"global_sum": aggregation.global_sum, "contributor_counts": aggregation.contributor_counts}
+            {
+                "global_sum": aggregation.global_sum,
+                "contributor_counts": aggregation.contributor_counts,
+            }
         )
         metrics_out = aggregate_metricrecords(contents, "num-examples")
         metrics_out["rejected_count"] = len(replies) - len(uploads)
@@ -96,16 +104,35 @@ class FDStrategy(Strategy):
                 continue
             targets, valid = leave_self_out_targets(self._last_aggregation, upload)
             record = RecordDict(
-                {"arrays": array_record_from_numpy({"targets": targets, "valid": valid}), "config": config}
+                {
+                    "arrays": array_record_from_numpy({"targets": targets, "valid": valid}),
+                    "config": config,
+                }
             )
             messages.append(Message(record, message_type=MessageType.EVALUATE, dst_node_id=node_id))
         return messages
 
     def aggregate_evaluate(self, server_round: int, replies: Iterable[Message]):
         valid_senders = frozenset(str(n) for n in self._current_node_ids)
-        contents = [
-            msg.content for msg in replies if not msg.has_error() and str(msg.metadata.src_node_id) in valid_senders
+        valid_replies = [
+            msg
+            for msg in replies
+            if not msg.has_error() and str(msg.metadata.src_node_id) in valid_senders
         ]
-        if not contents:
+        if not valid_replies:
             return None
-        return aggregate_metricrecords(contents, "num-examples")
+        # The paper explicitly describes FD's reported result as the highest-performing client,
+        # not an invented global model or a private-data weighted average.
+        best = max(valid_replies, key=lambda msg: float(msg.content["metrics"]["test_accuracy"]))
+        metrics = best.content["metrics"]
+        return MetricRecord(
+            {
+                "loss": float(metrics["test_loss"]),
+                "accuracy": float(metrics["test_accuracy"]),
+                "macro_precision": float(metrics["test_macro_precision"]),
+                "macro_recall": float(metrics["test_macro_recall"]),
+                "macro_f1": float(metrics["test_macro_f1"]),
+                "selected_client": int(best.metadata.src_node_id),
+                "num_replies": len(valid_replies),
+            }
+        )

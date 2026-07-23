@@ -31,7 +31,9 @@ def _run_dir_for(algorithm: str, scenario: int = 1) -> Path:
     return config.output_path / run_id
 
 
-def _run_flwr(algorithm: str, scenario: int = 1, num_supernodes: int = 27) -> subprocess.CompletedProcess:
+def _run_flwr(
+    algorithm: str, scenario: int = 1, num_supernodes: int = 27
+) -> subprocess.CompletedProcess:
     cmd = [
         "flwr",
         "run",
@@ -56,13 +58,19 @@ def test_two_round_smoke_completes(algorithm: str) -> None:
     assert summary["algorithm"] == algorithm
     assert summary["final_round"] == 2
 
-    events = [json.loads(line) for line in (run_dir / "events.jsonl").read_text().splitlines()]
+    attempt = json.loads((run_dir / "current_attempt.json").read_text())
+    attempt_dir = Path(attempt["attempt_dir"])
+    events = [json.loads(line) for line in (attempt_dir / "events.jsonl").read_text().splitlines()]
     assert events[0]["message"] == "run_start"
     assert events[-1]["message"] == "run_end"
     assert any(e["message"] == "aggregate" and e.get("phase") == "train" for e in events)
     assert any(e["message"] == "aggregate" and e.get("phase") == "evaluate" for e in events)
 
     assert (run_dir / "communication.parquet").exists()
+    assert (run_dir / "metrics.parquet").exists()
+    assert (run_dir / "checkpoints" / "round_2.pt").exists()
+    assert (attempt_dir / "telemetry" / "server.jsonl").exists()
+    assert len(list((attempt_dir / "telemetry" / "clients").glob("*.jsonl"))) == 27
 
 
 @pytest.mark.slow

@@ -9,7 +9,8 @@ layout the M10 reporting/reproducibility-bundle contract expects:
     code_version.json
     metrics.parquet          (created by the metrics writer, M6)
     communication.parquet    (created by the comms writer, M6)
-    events.jsonl             (structured log stream, see logging_utils)
+    attempts/<attempt-id>/events.jsonl
+    attempts/<attempt-id>/telemetry/{server.jsonl,clients/*.jsonl}
     checkpoints/
     plots/
     summary.json
@@ -23,11 +24,14 @@ device information ... before training begins".
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+import torch
 
 from ssfl.config import ExperimentConfig, capture_environment_snapshot, compute_run_id
 
@@ -47,6 +51,8 @@ class RunContext:
     run_id: str
     run_dir: Path
     config: ExperimentConfig
+    attempt_id: str
+    attempt_dir: Path
 
     @property
     def checkpoints_dir(self) -> Path:
@@ -58,7 +64,24 @@ class RunContext:
 
     @property
     def events_path(self) -> Path:
-        return self.run_dir / "events.jsonl"
+        return self.attempt_dir / "events.jsonl"
+
+    @property
+    def telemetry_dir(self) -> Path:
+        path = self.attempt_dir / "telemetry"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @staticmethod
+    def _create_attempt(run_dir: Path) -> tuple[str, Path]:
+        attempt_id = f"{os.getpid()}-{uuid.uuid4().hex[:12]}"
+        attempt_dir = run_dir / "attempts" / attempt_id
+        attempt_dir.mkdir(parents=True, exist_ok=False)
+        _atomic_write_json(
+            run_dir / "current_attempt.json",
+            {"attempt_id": attempt_id, "attempt_dir": str(attempt_dir)},
+        )
+        return attempt_id, attempt_dir
 
     @classmethod
     def create(
@@ -78,6 +101,7 @@ class RunContext:
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "checkpoints").mkdir(exist_ok=True)
         (run_dir / "plots").mkdir(exist_ok=True)
+        attempt_id, attempt_dir = cls._create_attempt(run_dir)
 
         _atomic_write_text(
             run_dir / "resolved_config.yaml",
@@ -88,7 +112,13 @@ class RunContext:
             _atomic_write_json(run_dir / "dataset_manifest.json", dataset_manifest)
         _atomic_write_json(run_dir / "code_version.json", code_version or {})
 
-        return cls(run_id=run_id, run_dir=run_dir, config=config)
+        return cls(
+            run_id=run_id,
+            run_dir=run_dir,
+            config=config,
+            attempt_id=attempt_id,
+            attempt_dir=attempt_dir,
+        )
 
     @classmethod
     def resume(cls, run_dir: Path) -> "RunContext":
@@ -101,7 +131,14 @@ class RunContext:
             raise FileNotFoundError(f"{run_dir} has no resolved_config.yaml; not a valid run dir")
         payload = yaml.safe_load(config_path.read_text())
         config = ExperimentConfig.model_validate(payload)
-        return cls(run_id=run_dir.name, run_dir=run_dir, config=config)
+        attempt_id, attempt_dir = cls._create_attempt(run_dir)
+        return cls(
+            run_id=run_dir.name,
+            run_dir=run_dir,
+            config=config,
+            attempt_id=attempt_id,
+            attempt_dir=attempt_dir,
+        )
 
     def write_summary(self, summary: dict[str, Any]) -> None:
         _atomic_write_json(self.run_dir / "summary.json", summary)
@@ -121,3 +158,42 @@ class RunContext:
                 continue
             best = max(best, n)
         return best
+
+    def checkpoint_due(self, server_round: int) -> bool:
+        return (
+            server_round % self.config.checkpoint_interval == 0
+            or server_round in self.config.checkpoint_rounds
+            or server_round == self.config.num_server_rounds
+        )
+
+    def save_server_checkpoint(
+        self,
+        server_round: int,
+        arrays: dict[str, Any],
+        server_model_state: dict[str, Any] | None,
+        extra: dict[str, Any] | None = None,
+    ) -> Path:
+        """Atomically persist a phase-consistent completed server round."""
+        path = self.checkpoints_dir / f"round_{server_round}.pt"
+        tmp = path.with_suffix(".pt.tmp")
+        torch.save(
+            {
+                "round": server_round,
+                "arrays": arrays,
+                "server_model_state": server_model_state,
+                "extra": extra or {},
+            },
+            tmp,
+        )
+        tmp.replace(path)
+        return path
+
+    def load_latest_server_checkpoint(self) -> dict[str, Any] | None:
+        server_round = self.last_completed_round()
+        if server_round == 0:
+            return None
+        return torch.load(
+            self.checkpoints_dir / f"round_{server_round}.pt",
+            map_location="cpu",
+            weights_only=False,
+        )
