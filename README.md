@@ -64,6 +64,10 @@ study—run:
 uv run python -m ssfl.experiments.run_suite --matrix configs/experiments.yaml --resume
 ```
 
+To run the proposed SSFL-CNN solution for scenarios 1, 2, and 3 first, use
+`configs/experiments_solution.yaml`. The entries have the same identities as the full matrix, so a
+later `configs/experiments.yaml --resume` run skips those completed results.
+
 To resume one interrupted run from its last completed round, add
 `resume-from="artifacts/runs/<run-id>"` to `--run-config` while keeping the original profile,
 algorithm, scenario, device, and federation configuration.
