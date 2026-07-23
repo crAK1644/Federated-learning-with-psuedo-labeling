@@ -5,7 +5,7 @@ description = "Semisupervised Federated Learning (SSFL) paper reproduction on N-
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "torch>=2.2",
+    "torch==2.6.0",
     "flwr[simulation]>=1.13",
     "pydantic>=2.6",
     "pyyaml>=6.0",
