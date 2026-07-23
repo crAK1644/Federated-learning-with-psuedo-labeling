@@ -11,6 +11,7 @@ from ssfl.models import build_classifier, build_discriminator
 from ssfl.protocols.message import Envelope
 from ssfl.protocols.ssfl import (
     ABSTAIN,
+    AggregationResult,
     ProposalResult,
     aggregate_soft,
     aggregate_votes,
@@ -175,9 +176,15 @@ def test_client_proposal_step_soft_label_representation() -> None:
 def test_aggregate_soft_means_and_argmaxes() -> None:
     num_classes = 3
     probs_a = np.array([[0.7, 0.2, 0.1], [0.0, 0.0, 0.0]], dtype=np.float32)  # 2nd row unfamiliar
-    probs_b = np.array([[0.5, 0.3, 0.2], [0.0, 0.0, 0.0]], dtype=np.float32)  # both unfamiliar on row 2
-    client_a = ProposalResult("a", None, np.zeros(2, np.float32), 0.5, 0.0, None, soft_probs=probs_a)
-    client_b = ProposalResult("b", None, np.zeros(2, np.float32), 0.5, 0.0, None, soft_probs=probs_b)
+    probs_b = np.array(
+        [[0.5, 0.3, 0.2], [0.0, 0.0, 0.0]], dtype=np.float32
+    )  # both unfamiliar on row 2
+    client_a = ProposalResult(
+        "a", None, np.zeros(2, np.float32), 0.5, 0.0, None, soft_probs=probs_a
+    )
+    client_b = ProposalResult(
+        "b", None, np.zeros(2, np.float32), 0.5, 0.0, None, soft_probs=probs_b
+    )
     proposals = [(_envelope("a"), client_a), (_envelope("b"), client_b)]
 
     result = aggregate_soft(proposals, num_open=2, num_classes=num_classes)
@@ -197,20 +204,41 @@ def test_aggregate_soft_bit_identical_regardless_of_proposal_order() -> None:
     rng = np.random.default_rng(2)
     num_open, num_classes = 5, 4
     proposals = [
-        (_envelope(str(i)), ProposalResult(str(i), None, np.zeros(num_open, np.float32), 0.5, 0.0, None, soft_probs=rng.random((num_open, num_classes), dtype=np.float32)))
+        (
+            _envelope(str(i)),
+            ProposalResult(
+                str(i),
+                None,
+                np.zeros(num_open, np.float32),
+                0.5,
+                0.0,
+                None,
+                soft_probs=rng.random((num_open, num_classes), dtype=np.float32),
+            ),
+        )
         for i in range(10)
     ]
     forward = aggregate_soft(proposals, num_open=num_open, num_classes=num_classes)
     backward = aggregate_soft(list(reversed(proposals)), num_open=num_open, num_classes=num_classes)
-    shuffled = aggregate_soft([proposals[i] for i in rng.permutation(len(proposals))], num_open=num_open, num_classes=num_classes)
+    shuffled = aggregate_soft(
+        [proposals[i] for i in rng.permutation(len(proposals))],
+        num_open=num_open,
+        num_classes=num_classes,
+    )
     assert np.array_equal(forward.global_labels, backward.global_labels)
     assert np.array_equal(forward.global_labels, shuffled.global_labels)
 
 
 def test_aggregate_votes_majority_tie_and_all_abstain() -> None:
-    client_a = ProposalResult("a", np.array([0, 0, ABSTAIN]), np.zeros(3, np.float32), 0.5, 0.0, 0.0)
-    client_b = ProposalResult("b", np.array([0, 1, ABSTAIN]), np.zeros(3, np.float32), 0.5, 0.0, 0.0)
-    client_c = ProposalResult("c", np.array([1, ABSTAIN, ABSTAIN]), np.zeros(3, np.float32), 0.5, 0.0, 0.0)
+    client_a = ProposalResult(
+        "a", np.array([0, 0, ABSTAIN]), np.zeros(3, np.float32), 0.5, 0.0, 0.0
+    )
+    client_b = ProposalResult(
+        "b", np.array([0, 1, ABSTAIN]), np.zeros(3, np.float32), 0.5, 0.0, 0.0
+    )
+    client_c = ProposalResult(
+        "c", np.array([1, ABSTAIN, ABSTAIN]), np.zeros(3, np.float32), 0.5, 0.0, 0.0
+    )
     proposals = [(_envelope("a"), client_a), (_envelope("b"), client_b), (_envelope("c"), client_c)]
 
     result = aggregate_votes(proposals, num_open=3, num_classes=3)
@@ -238,8 +266,6 @@ def test_aggregate_votes_idempotent_under_duplicate_sender() -> None:
 
 
 def test_client_and_server_distillation_step() -> None:
-    from ssfl.protocols.ssfl import AggregationResult
-
     open_ds = _dataset(16, seed=3, labeled=False)
     global_labels = np.array([i % 11 for i in range(16)], dtype=np.int64)
     valid_mask = np.ones(16, dtype=bool)
@@ -262,8 +288,66 @@ def test_client_and_server_distillation_step() -> None:
     server_classifier = build_classifier(Backbone.cnn)
     test_ds = _dataset(20, seed=4, labeled=True)
     train_result, eval_metrics = server_distillation_step(
-        server_classifier, open_ds, aggregation, test_ds, DEVICE, epochs=1, lr=1e-3, batch_size=8, seed=0
+        server_classifier,
+        open_ds,
+        aggregation,
+        test_ds,
+        DEVICE,
+        epochs=1,
+        lr=1e-3,
+        batch_size=8,
+        seed=0,
     )
     assert math.isfinite(train_result.final_loss)
+    assert 0.0 <= eval_metrics["accuracy"] <= 1.0
+    assert math.isfinite(eval_metrics["loss"])
+
+
+def test_client_and_server_skip_empty_distillation_but_server_still_evaluates() -> None:
+    open_ds = _dataset(16, seed=3, labeled=False)
+    aggregation = AggregationResult(
+        global_labels=np.full(16, ABSTAIN, dtype=np.int64),
+        valid_mask=np.zeros(16, dtype=bool),
+        votes_per_class=np.zeros((16, 11), dtype=np.int64),
+        participating_counts=np.zeros(16, dtype=np.int64),
+        tie_count=0,
+        all_abstain_count=16,
+        rejected=(),
+    )
+    events: list[tuple[str, dict]] = []
+
+    classifier = build_classifier(Backbone.cnn)
+    before = {name: value.clone() for name, value in classifier.state_dict().items()}
+    client_result = client_distillation_step(
+        classifier,
+        open_ds,
+        aggregation,
+        DEVICE,
+        epochs=1,
+        lr=1e-3,
+        batch_size=8,
+        seed=0,
+        event_callback=lambda event, fields: events.append((event, fields)),
+    )
+    assert client_result.total_examples == 0
+    assert math.isnan(client_result.final_loss)
+    assert all(torch.equal(before[name], value) for name, value in classifier.state_dict().items())
+    assert events[-1][0] == "training_skipped"
+    assert events[-1][1]["reason"] == "no_globally_valid_pseudo_labels"
+
+    server_classifier = build_classifier(Backbone.cnn)
+    test_ds = _dataset(20, seed=4, labeled=True)
+    train_result, eval_metrics = server_distillation_step(
+        server_classifier,
+        open_ds,
+        aggregation,
+        test_ds,
+        DEVICE,
+        epochs=1,
+        lr=1e-3,
+        batch_size=8,
+        seed=0,
+    )
+    assert train_result.total_examples == 0
     assert 0.0 <= eval_metrics["accuracy"] <= 1.0
     assert math.isfinite(eval_metrics["loss"])

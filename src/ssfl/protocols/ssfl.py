@@ -22,8 +22,8 @@ from torch.utils.data import TensorDataset
 from ssfl.config import DiscriminatorMode, LabelRepresentation, ThresholdPolicy
 from ssfl.models import SSFLModel
 from ssfl.protocols.message import Envelope
-from ssfl.training import evaluate, make_loader, predict_probs, train_supervised
-from ssfl.telemetry import EventCallback
+from ssfl.training import TrainResult, evaluate, make_loader, predict_probs, train_supervised
+from ssfl.telemetry import EventCallback, gpu_snapshot
 
 ABSTAIN = -1
 
@@ -306,6 +306,20 @@ def client_distillation_step(
     """Phase B (client): hard-label CE on the valid subset of the global open labels. Returns
     metrics only -- no model parameters cross this function's boundary back to a message."""
     dataset = _valid_open_dataset(open_dataset, aggregation)
+    if len(dataset) == 0:
+        if event_callback:
+            event_callback(
+                "training_skipped",
+                {
+                    "stage": "client_global_label_distillation",
+                    "reason": "no_globally_valid_pseudo_labels",
+                    "epochs_requested": epochs,
+                    "total_examples": 0,
+                    "total_batches": 0,
+                    **gpu_snapshot(),
+                },
+            )
+        return TrainResult()
     loader = make_loader(dataset, batch_size, shuffle=True, seed=seed)
     return train_supervised(
         classifier,
@@ -333,16 +347,31 @@ def server_distillation_step(
     """Phase B (server): train the server's own persistent classifier on the same valid open
     labels, then evaluate it on the full test set."""
     dataset = _valid_open_dataset(open_dataset, aggregation)
-    loader = make_loader(dataset, batch_size, shuffle=True, seed=seed)
-    train_result = train_supervised(
-        server_classifier,
-        loader,
-        device,
-        epochs,
-        lr,
-        event_callback=event_callback,
-        stage="server_global_label_distillation",
-    )
+    if len(dataset) == 0:
+        train_result = TrainResult()
+        if event_callback:
+            event_callback(
+                "training_skipped",
+                {
+                    "stage": "server_global_label_distillation",
+                    "reason": "no_globally_valid_pseudo_labels",
+                    "epochs_requested": epochs,
+                    "total_examples": 0,
+                    "total_batches": 0,
+                    **gpu_snapshot(),
+                },
+            )
+    else:
+        loader = make_loader(dataset, batch_size, shuffle=True, seed=seed)
+        train_result = train_supervised(
+            server_classifier,
+            loader,
+            device,
+            epochs,
+            lr,
+            event_callback=event_callback,
+            stage="server_global_label_distillation",
+        )
 
     test_loader = make_loader(test_dataset, batch_size, shuffle=False, seed=seed)
     eval_metrics = evaluate(

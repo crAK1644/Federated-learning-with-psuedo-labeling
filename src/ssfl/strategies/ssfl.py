@@ -185,4 +185,17 @@ class SSFLStrategy(Strategy):
         ]
         if not contents:
             return None
+        total_examples = sum(
+            float(next(iter(content.metric_records.values()))["num-examples"])
+            for content in contents
+        )
+        if total_examples == 0:
+            return MetricRecord(
+                {
+                    "loss": 0.0,
+                    "distillation_skipped": 1,
+                    "distillation_examples": 0,
+                    "responding_clients": len(contents),
+                }
+            )
         return aggregate_metricrecords(contents, "num-examples")

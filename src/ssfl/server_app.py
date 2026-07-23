@@ -195,12 +195,16 @@ def main(grid: Grid, context: Context) -> None:
                 seed=exp_config.seed,
                 event_callback=server_callback,
             )
+            distillation_skipped = train_result.total_examples == 0
+            train_loss = train_result.final_loss if not distillation_skipped else 0.0
             classification = compute_classification_metrics(
                 eval_metrics["y_true"], eval_metrics["y_pred"], NUM_CLASSES
             )
             telemetry.emit(
                 "classification_metrics",
                 round=server_round,
+                distillation_skipped=distillation_skipped,
+                distillation_examples=train_result.total_examples,
                 **classification.to_dict(include_arrays=True),
             )
             metrics_ledger.record(
@@ -208,7 +212,7 @@ def main(grid: Grid, context: Context) -> None:
                 scenario=exp_config.scenario.value,
                 round=server_round,
                 loss=eval_metrics["loss"],
-                train_loss=train_result.final_loss,
+                train_loss=train_loss,
                 metrics=classification,
                 valid_rate=float(valid_mask.mean()),
             )
@@ -216,7 +220,9 @@ def main(grid: Grid, context: Context) -> None:
                 {
                     "loss": eval_metrics["loss"],
                     "accuracy": eval_metrics["accuracy"],
-                    "train_loss": train_result.final_loss,
+                    "train_loss": train_loss,
+                    "distillation_skipped": int(distillation_skipped),
+                    "distillation_examples": train_result.total_examples,
                 }
             )
 

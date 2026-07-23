@@ -327,11 +327,17 @@ def _ssfl_evaluate(
         event_callback=callback,
     )
     _save_model(context, "classifier", classifier)
+    num_distillation_examples = int(valid_mask.sum())
+    distillation_skipped = num_distillation_examples == 0
 
     reply = RecordDict(
         {
             "metrics": MetricRecord(
-                {"loss": result.final_loss, "num-examples": int(valid_mask.sum())}
+                {
+                    "loss": result.final_loss if not distillation_skipped else 0.0,
+                    "num-examples": num_distillation_examples,
+                    "distillation_skipped": int(distillation_skipped),
+                }
             )
         }
     )

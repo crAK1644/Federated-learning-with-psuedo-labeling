@@ -148,3 +148,28 @@ def test_all_strategies_survive_zero_replies():
     dsfl = DSFLStrategy(temperature=0.1, num_clients=2, num_open=NUM_OPEN)
     dsfl._current_node_ids = [1, 2]
     assert dsfl.aggregate_train(server_round=1, replies=[]) == (None, None)
+
+
+def test_ssfl_survives_all_clients_skipping_empty_distillation():
+    strategy = SSFLStrategy(
+        scenario=1,
+        dataset_manifest_hash="h",
+        num_open=NUM_OPEN,
+        num_clients=2,
+        voting_mode=VotingMode.enabled,
+    )
+    strategy._current_node_ids = [1, 2]
+    replies = [
+        _reply(
+            {},
+            {"loss": 0.0, "num-examples": 0, "distillation_skipped": 1},
+            src_node_id=node_id,
+        )
+        for node_id in (1, 2)
+    ]
+
+    metrics = strategy.aggregate_evaluate(server_round=1, replies=replies)
+
+    assert metrics["distillation_skipped"] == 1
+    assert metrics["distillation_examples"] == 0
+    assert metrics["responding_clients"] == 2
