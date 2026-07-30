@@ -2,13 +2,20 @@
 #
 # Hypothesis: the gafgyt.tcp/gafgyt.udp merge comes from feature preparation, not from the
 # voting rule. Prediction: no threshold or vote-margin arm recovers both classes; the
-# normalization arm (privnorm) does.
+# normalization arm (quantile) does.
 #
 # 7 arms x 2 scenarios x 3 seeds = 42 runs on the 50-round collapse_probe profile.
-# The privnorm arm needs a second prepared dataset:
-#   uv run python -m ssfl.data.prepare_data --input data --output artifacts/data_privonly \
-#       --seed 2023 --normalization-mode private_only
+# The quantile arm needs a second prepared dataset:
+#   uv run python -m ssfl.data.prepare_data --input data --output artifacts/data_quantile \
+#       --seed 2023 --normalization-mode quantile
 # If the budget is tight, run scenario 1 first (21 runs).
+#
+# This arm was originally private_only, retired without spending GPU time. Raw gafgyt.tcp/udp
+# hold 97,030 / 107,665 unique rows, but the 5 features separating them span ~1.5e9 while the
+# classes differ by ~183 raw units -- 2 float32 ULPs after ANY affine map. private_only only
+# changes which rows the min-max is fitted over, so it is still affine and still fails. A rank
+# transform is monotone but non-affine: linear probe on the pair goes 0.5008 -> 0.9892
+# (ceiling 0.9894 -- 38 tcp rows sit exactly on the udp vector in the source data).
 
 entries:
   # --- base: baseline: paper voting rule
@@ -131,22 +138,22 @@ entries:
     base_profile: collapse_probe
     overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2025, ssfl_vote_margin: 2}
 
-  # --- privnorm: min-max fitted on private data only
-  - name: collapse_privnorm_s1_seed2023
+  # --- quantile: rank transform (the only non-affine arm; see header)
+  - name: collapse_quantile_s1_seed2023
     base_profile: collapse_probe
-    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023, data_path: artifacts/data_privonly}
-  - name: collapse_privnorm_s1_seed2024
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023, data_path: artifacts/data_quantile}
+  - name: collapse_quantile_s1_seed2024
     base_profile: collapse_probe
-    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2024, data_path: artifacts/data_privonly}
-  - name: collapse_privnorm_s1_seed2025
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2024, data_path: artifacts/data_quantile}
+  - name: collapse_quantile_s1_seed2025
     base_profile: collapse_probe
-    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2025, data_path: artifacts/data_privonly}
-  - name: collapse_privnorm_s2_seed2023
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2025, data_path: artifacts/data_quantile}
+  - name: collapse_quantile_s2_seed2023
     base_profile: collapse_probe
-    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2023, data_path: artifacts/data_privonly}
-  - name: collapse_privnorm_s2_seed2024
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2023, data_path: artifacts/data_quantile}
+  - name: collapse_quantile_s2_seed2024
     base_profile: collapse_probe
-    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2024, data_path: artifacts/data_privonly}
-  - name: collapse_privnorm_s2_seed2025
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2024, data_path: artifacts/data_quantile}
+  - name: collapse_quantile_s2_seed2025
     base_profile: collapse_probe
-    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2025, data_path: artifacts/data_privonly}
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2025, data_path: artifacts/data_quantile}

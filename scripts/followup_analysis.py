@@ -590,20 +590,63 @@ def emit_memo(q1: dict, q2: dict, q6: dict) -> str:
         fig_block("F-A3"), fig_block("F-A1"), fig_block("F-A2"),
         df_table(sep.round(4), "T-A1. Pairwise separability in the scaled input space "
                                "(5-fold cross-validation on the test split)."),
-        r"\textbf{Open question.} Whether this degeneracy exists in the source N-BaIoT CSVs or is "
-        r"created by the global min-max scaling (\texttt{normalization\_mode = all\_mini}) cannot "
-        r"be settled from the artefacts on this machine, because the raw CSV tree lives on the GPU "
-        r"host. The evidence favours scaling, and strongly. The surviving coordinates sit at "
-        rf"{st['value_at_differing_features']:.6f}, i.e. near the top of the global min-max range, "
-        r"and 1,746 \emph{distinct} source rows collapse onto one output vector. That is precisely "
-        r"what a min-max fitted across the whole mini dataset does to a feature block whose "
-        r"within-class variation is orders of magnitude smaller than the dataset-wide range: the "
-        r"variation is divided away until it falls under float32 resolution and quantises to zero. "
-        r"Counting unique rows in the raw \texttt{*.gafgyt.tcp.csv} / \texttt{*.gafgyt.udp.csv} "
-        r"files settles it in about two minutes and should be done before anything else. If the "
-        r"raw rows are distinct, the defect is in \texttt{scaling.py} and is fixable; if they are "
-        r"already identical, the dataset simply cannot support an 11-way split and the paper's "
-        r"per-class numbers need a different explanation.",
+        r"\textbf{The degeneracy is manufactured by the scaler, not present in N-BaIoT.} An "
+        r"earlier draft of this memo left that as an open question, because the raw CSV tree was "
+        r"unavailable. It has since been re-downloaded from the UCI archive and counted directly. "
+        r"The source files are richly distinct:",
+        r"\begin{quote}\small "
+        r"\texttt{gafgyt.tcp}: 97{,}030 unique rows out of 859{,}850. \\ "
+        r"\texttt{gafgyt.udp}: 107{,}665 unique rows out of 946{,}366."
+        r"\end{quote}",
+        r"So roughly one row in nine is unique, and the widest single feature carries 97{,}029 "
+        r"distinct values. After \texttt{normalization\_mode = all\_mini} those same two classes "
+        r"occupy 5 and 1 unique vectors. The information is destroyed between the CSV and the "
+        r"\texttt{.npy}.",
+        "",
+        r"The mechanism is visible in the raw values. The surviving coordinates sit at "
+        rf"{st['value_at_differing_features']:.6f} of the global min-max range, and the raw "
+        r"separation between the two classes there is about 183 units against a fitted range of "
+        r"roughly $1.53 \times 10^{9}$. Dividing one by the other gives a relative gap near "
+        r"$1.2 \times 10^{-7}$, which is the resolution of float32 itself -- hence the two ULPs. "
+        r"A second detail sharpens this: the median feature holds only 87 (tcp) / 94 (udp) "
+        r"distinct raw values. Individual features are already coarse; rows are distinct because "
+        r"their \emph{combinations} differ. A global min-max divides each feature's within-class "
+        r"variation by a dataset-wide range set by unrelated classes, until every coordinate "
+        r"quantises to the same float32 and the combinations vanish with them.",
+        "",
+        r"\textbf{Which normalisations can fix it, and which cannot.} This follows from the "
+        r"arithmetic rather than from experiment. Min-max, z-score, robust median/IQR and "
+        r"log1p-then-min-max are all, per feature, affine maps $x \mapsto ax + b$ (log1p is not "
+        r"affine in $x$, but it is applied identically to both values and the two classes differ "
+        r"by 1 part in $10^{7}$, so over that interval it acts as one). An affine map rescales the "
+        r"value and the gap by the same factor $a$, so the number of representable float32 steps "
+        r"between them is invariant. \emph{No affine normalisation can separate these two "
+        r"classes.} A rank transform is monotone but not affine: it replaces each value by its "
+        r"position in the sorted fit set, so the gap becomes the number of samples lying between "
+        r"the two values. Measured on the five discriminating features that is about 1.7 million "
+        r"ULPs instead of 2.",
+        df_table(
+            pd.DataFrame({
+                "normalisation": ["global min-max (shipped)", "global min-max, float64",
+                                  "z-score", "robust median/IQR", "log1p then min-max",
+                                  "rank / quantile"],
+                "affine": ["yes", "yes", "yes", "yes", "effectively", "no"],
+                "unique rows tcp/udp": ["5 / 1"] * 6,
+                "gap (float32 ULPs)": ["2", "2", "2", "2", "2", "1,695,159"],
+                "linear probe": [0.5008, 0.5008, 0.5008, 0.5008, 0.5008, 0.9892],
+            }),
+            "T-A1b. Six normalisations applied to the same raw features. Every affine map leaves "
+            "the pair exactly two float32 steps apart and a linear probe at chance; only the "
+            "non-affine rank transform separates them.",
+        ),
+        r"The rank transform was implemented as \texttt{NormalizationMode.quantile} and a full "
+        r"dataset prepared with it on the GPU host. A linear probe on \texttt{gafgyt.tcp} against "
+        r"\texttt{gafgyt.udp} rises from 0.5008 to \textbf{0.9892}, which is the ceiling: 38 "
+        r"\texttt{gafgyt.tcp} rows land exactly on the \texttt{gafgyt.udp} vector in the source "
+        r"data and are unrecoverable by any transform. The unique-row counts stay at 5 and 1, "
+        r"exactly as predicted -- ranking is per value, so identical rows remain identical. The "
+        r"two points moved apart; they did not multiply. Control pairs improve as well "
+        r"(\texttt{mirai.ack} against \texttt{mirai.udp}: 0.6875 to 0.9950).",
 
         r"\section{Why precision moved so much more than accuracy and F1}",
         "This is arithmetic, not a measurement artefact. Macro precision averages over classes; "
@@ -704,16 +747,25 @@ def emit_memo(q1: dict, q2: dict, q6: dict) -> str:
         r"$\times$ 2 scenarios $\times$ 3 seeds, on a new 50-round \texttt{collapse\_probe} "
         r"profile. Fifty rounds suffice because the merge locks in at round 3--10 in every "
         r"scenario. The arms are the baseline; confidence thresholds fixed at 0.70, 0.80 and 0.90; "
-        r"soft labels with voting disabled; a vote margin of 2; and a re-prepared dataset scaled "
-        r"with \texttt{--normalization-mode private\_only}. Only the vote-margin arm needed new "
-        r"code (\texttt{ssfl\_vote\_margin}, six lines in \texttt{aggregate\_votes} plus a unit "
-        r"test); every other arm was already reachable through existing configuration.",
+        r"soft labels with voting disabled; a vote margin of 2; and a re-prepared dataset. Only "
+        r"the vote-margin arm needed new code (\texttt{ssfl\_vote\_margin}, six lines in "
+        r"\texttt{aggregate\_votes} plus a unit test); every other arm was already reachable "
+        r"through existing configuration.",
+        "",
+        r"The normalisation arm was originally specified as \texttt{--normalization-mode "
+        r"private\_only}, and the analysis above retires that choice before it costs any GPU time: "
+        r"\texttt{private\_only} changes only \emph{which rows} the min-max is fitted over, so it "
+        r"is still an affine map and still leaves the pair two ULPs apart. It is now predicted to "
+        r"fail exactly like the six threshold and voting arms. The arm has been replaced by "
+        r"\texttt{--normalization-mode quantile}, the rank transform of Section 1, which is the "
+        r"only arm in the matrix with a mechanism that addresses the measured cause.",
         "",
         "Success criterion, unchanged from the main report's Section 25.B: at round 50 both "
         "flooding classes have non-zero recall while merged-pair detection quality (about 98\\%) "
-        "is preserved. If neither available normalization mode clears it, a log1p pre-transform in "
-        "the scaler is the next thing to try -- that is a separate work item, not part of this "
-        "matrix.",
+        "is preserved. The prediction is now sharp and cheap to falsify: six of the seven arms "
+        "should fail and the quantile arm should pass. Should the quantile arm also fail, the "
+        "cause is not the input geometry -- the pair is separable at 0.9892 after the transform -- "
+        "and the protocol explanation returns to the table.",
         r"\end{document}", ""]
     return "\n".join(parts)
 
