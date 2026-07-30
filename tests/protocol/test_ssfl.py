@@ -253,6 +253,29 @@ def test_aggregate_votes_majority_tie_and_all_abstain() -> None:
     assert result.all_abstain_count == 1
 
 
+def test_aggregate_votes_margin_abstains_on_weak_consensus() -> None:
+    # index 0: 3-0 for class 0 (margin 3); index 1: 2-1 (margin 1); index 2: 2-2 tie (margin 0)
+    clients = [
+        ProposalResult("a", np.array([0, 0, 0]), np.zeros(3, np.float32), 0.5, 0.0, 0.0),
+        ProposalResult("b", np.array([0, 0, 0]), np.zeros(3, np.float32), 0.5, 0.0, 0.0),
+        ProposalResult("c", np.array([0, 1, 1]), np.zeros(3, np.float32), 0.5, 0.0, 0.0),
+        ProposalResult("d", np.array([0, ABSTAIN, 1]), np.zeros(3, np.float32), 0.5, 0.0, 0.0),
+    ]
+    proposals = [(_envelope(c.client_id), c) for c in clients]
+
+    baseline = aggregate_votes(proposals, num_open=3, num_classes=3)
+    assert list(baseline.global_labels) == [0, 0, 0]  # tie at index 2 -> lowest index
+    assert baseline.valid_mask.all()
+
+    margin1 = aggregate_votes(proposals, num_open=3, num_classes=3, vote_margin=1)
+    assert list(margin1.global_labels) == [0, 0, ABSTAIN]  # only the tie drops out
+    assert list(margin1.valid_mask) == [True, True, False]
+
+    margin2 = aggregate_votes(proposals, num_open=3, num_classes=3, vote_margin=2)
+    assert list(margin2.global_labels) == [0, ABSTAIN, ABSTAIN]
+    assert margin2.all_abstain_count == 0  # margin abstentions are not all-abstain indices
+
+
 def test_aggregate_votes_idempotent_under_duplicate_sender() -> None:
     client_a = ProposalResult("a", np.array([0]), np.zeros(1, np.float32), 0.5, 0.0, 0.0)
     once = aggregate_votes([(_envelope("a"), client_a)], num_open=1, num_classes=2)

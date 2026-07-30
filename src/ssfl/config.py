@@ -193,6 +193,8 @@ class ExperimentConfig(BaseModel):
     ssfl_voting_mode: VotingMode = VotingMode.enabled
     ssfl_label_representation: LabelRepresentation = LabelRepresentation.hard
     ssfl_soft_label_round_decimals: int | None = None
+    # Minimum (top - runner-up) vote gap required to accept a majority label; 0 = paper behaviour.
+    ssfl_vote_margin: int = Field(default=0, ge=0)
 
     # --- DS-FL-specific ------------------------------------------------
     dsfl_temperature: float = 0.1

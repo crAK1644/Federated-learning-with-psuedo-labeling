@@ -192,9 +192,17 @@ class AggregationResult:
 
 
 def aggregate_votes(
-    proposals: list[tuple[Envelope, ProposalResult]], num_open: int, num_classes: int
+    proposals: list[tuple[Envelope, ProposalResult]],
+    num_open: int,
+    num_classes: int,
+    vote_margin: int = 0,
 ) -> AggregationResult:
     """Per-index majority vote; ties -> lowest class index; all-abstain -> ABSTAIN + invalid.
+
+    ``vote_margin`` (default 0 = the paper's plain majority) additionally requires the winner to
+    lead the runner-up by at least that many votes; below it the index abstains. A tie always has
+    margin 0, so any ``vote_margin >= 1`` also makes ties abstain instead of falling through to
+    the lowest class index.
 
     Idempotent by construction: a duplicated envelope for a sender already counted is dropped
     (into ``rejected``) rather than counted twice, so re-aggregating a batch that accidentally
@@ -226,6 +234,10 @@ def aggregate_votes(
         winners = np.nonzero(row == max_votes)[0]
         if len(winners) > 1:
             tie_count += 1
+        if vote_margin:
+            runner_up = int(np.sort(row)[-2])
+            if int(max_votes) - runner_up < vote_margin:
+                continue  # consensus too weak -> stay ABSTAIN/invalid
         global_labels[i] = int(winners.min())
         valid_mask[i] = True
 

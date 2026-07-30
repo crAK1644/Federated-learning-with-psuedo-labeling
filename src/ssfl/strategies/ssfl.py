@@ -33,6 +33,7 @@ class SSFLStrategy(Strategy):
         num_open: int,
         num_clients: int,
         voting_mode: VotingMode = VotingMode.enabled,
+        vote_margin: int = 0,
         audit_dir: Path | None = None,
     ) -> None:
         self.scenario = scenario
@@ -40,6 +41,7 @@ class SSFLStrategy(Strategy):
         self.num_open = num_open
         self.num_clients = num_clients
         self.voting_mode = voting_mode
+        self.vote_margin = vote_margin
         self.audit_dir = audit_dir
         self._current_node_ids: list[int] = []
 
@@ -121,7 +123,12 @@ class SSFLStrategy(Strategy):
             return None, None
 
         if self.voting_mode == VotingMode.enabled:
-            result = aggregate_votes(proposals, num_open=self.num_open, num_classes=NUM_CLASSES)
+            result = aggregate_votes(
+                proposals,
+                num_open=self.num_open,
+                num_classes=NUM_CLASSES,
+                vote_margin=self.vote_margin,
+            )
         else:
             result = aggregate_soft(proposals, num_open=self.num_open, num_classes=NUM_CLASSES)
         if self.audit_dir is not None:

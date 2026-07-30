@@ -1,0 +1,152 @@
+# Collapse-mitigation ablation matrix (teacher follow-up question 6).
+#
+# Hypothesis: the gafgyt.tcp/gafgyt.udp merge comes from feature preparation, not from the
+# voting rule. Prediction: no threshold or vote-margin arm recovers both classes; the
+# normalization arm (privnorm) does.
+#
+# 7 arms x 2 scenarios x 3 seeds = 42 runs on the 50-round collapse_probe profile.
+# The privnorm arm needs a second prepared dataset:
+#   uv run python -m ssfl.data.prepare_data --input data --output artifacts/data_privonly \
+#       --seed 2023 --normalization-mode private_only
+# If the budget is tight, run scenario 1 first (21 runs).
+
+entries:
+  # --- base: baseline: paper voting rule
+  - name: collapse_base_s1_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023}
+  - name: collapse_base_s1_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2024}
+  - name: collapse_base_s1_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2025}
+  - name: collapse_base_s2_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2023}
+  - name: collapse_base_s2_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2024}
+  - name: collapse_base_s2_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2025}
+
+  # --- thr07: confidence threshold fixed at 0.70
+  - name: collapse_thr07_s1_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023, ssfl_threshold_policy: fixed_0_7}
+  - name: collapse_thr07_s1_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2024, ssfl_threshold_policy: fixed_0_7}
+  - name: collapse_thr07_s1_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2025, ssfl_threshold_policy: fixed_0_7}
+  - name: collapse_thr07_s2_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2023, ssfl_threshold_policy: fixed_0_7}
+  - name: collapse_thr07_s2_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2024, ssfl_threshold_policy: fixed_0_7}
+  - name: collapse_thr07_s2_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2025, ssfl_threshold_policy: fixed_0_7}
+
+  # --- thr08: confidence threshold fixed at 0.80
+  - name: collapse_thr08_s1_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023, ssfl_threshold_policy: fixed_0_8}
+  - name: collapse_thr08_s1_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2024, ssfl_threshold_policy: fixed_0_8}
+  - name: collapse_thr08_s1_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2025, ssfl_threshold_policy: fixed_0_8}
+  - name: collapse_thr08_s2_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2023, ssfl_threshold_policy: fixed_0_8}
+  - name: collapse_thr08_s2_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2024, ssfl_threshold_policy: fixed_0_8}
+  - name: collapse_thr08_s2_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2025, ssfl_threshold_policy: fixed_0_8}
+
+  # --- thr09: confidence threshold fixed at 0.90
+  - name: collapse_thr09_s1_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023, ssfl_threshold_policy: fixed_0_9}
+  - name: collapse_thr09_s1_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2024, ssfl_threshold_policy: fixed_0_9}
+  - name: collapse_thr09_s1_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2025, ssfl_threshold_policy: fixed_0_9}
+  - name: collapse_thr09_s2_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2023, ssfl_threshold_policy: fixed_0_9}
+  - name: collapse_thr09_s2_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2024, ssfl_threshold_policy: fixed_0_9}
+  - name: collapse_thr09_s2_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2025, ssfl_threshold_policy: fixed_0_9}
+
+  # --- soft: soft labels, no majority vote
+  - name: collapse_soft_s1_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023, ssfl_label_representation: soft, ssfl_voting_mode: disabled, ssfl_soft_label_round_decimals: 4}
+  - name: collapse_soft_s1_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2024, ssfl_label_representation: soft, ssfl_voting_mode: disabled, ssfl_soft_label_round_decimals: 4}
+  - name: collapse_soft_s1_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2025, ssfl_label_representation: soft, ssfl_voting_mode: disabled, ssfl_soft_label_round_decimals: 4}
+  - name: collapse_soft_s2_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2023, ssfl_label_representation: soft, ssfl_voting_mode: disabled, ssfl_soft_label_round_decimals: 4}
+  - name: collapse_soft_s2_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2024, ssfl_label_representation: soft, ssfl_voting_mode: disabled, ssfl_soft_label_round_decimals: 4}
+  - name: collapse_soft_s2_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2025, ssfl_label_representation: soft, ssfl_voting_mode: disabled, ssfl_soft_label_round_decimals: 4}
+
+  # --- margin2: majority must lead runner-up by >= 2 votes
+  - name: collapse_margin2_s1_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023, ssfl_vote_margin: 2}
+  - name: collapse_margin2_s1_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2024, ssfl_vote_margin: 2}
+  - name: collapse_margin2_s1_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2025, ssfl_vote_margin: 2}
+  - name: collapse_margin2_s2_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2023, ssfl_vote_margin: 2}
+  - name: collapse_margin2_s2_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2024, ssfl_vote_margin: 2}
+  - name: collapse_margin2_s2_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2025, ssfl_vote_margin: 2}
+
+  # --- privnorm: min-max fitted on private data only
+  - name: collapse_privnorm_s1_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023, data_path: artifacts/data_privonly}
+  - name: collapse_privnorm_s1_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2024, data_path: artifacts/data_privonly}
+  - name: collapse_privnorm_s1_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2025, data_path: artifacts/data_privonly}
+  - name: collapse_privnorm_s2_seed2023
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2023, data_path: artifacts/data_privonly}
+  - name: collapse_privnorm_s2_seed2024
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2024, data_path: artifacts/data_privonly}
+  - name: collapse_privnorm_s2_seed2025
+    base_profile: collapse_probe
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 2, seed: 2025, data_path: artifacts/data_privonly}

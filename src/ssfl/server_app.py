@@ -166,6 +166,7 @@ def main(grid: Grid, context: Context) -> None:
             num_open=len(open_dataset),
             num_clients=exp_config.num_clients(),
             voting_mode=exp_config.ssfl_voting_mode,
+            vote_margin=exp_config.ssfl_vote_margin,
             audit_dir=run_context.attempt_dir / "aggregation_audit",
         )
         initial_arrays = ArrayRecord()
