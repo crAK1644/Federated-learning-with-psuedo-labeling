@@ -231,13 +231,14 @@ def run_full(config: DataPrepConfig) -> dict[str, Any]:
                 f"private={expected_private} open={expected_open} test={expected_test}"
             )
 
-        if config.normalization_mode == NormalizationMode.all_mini:
+        # quantile fits over the same rows as all_mini, so the two differ only in the transform.
+        if config.normalization_mode == NormalizationMode.private_only:
+            fit_matrix = np.concatenate([s.private for s in splits.values()], axis=0)
+        else:
             fit_matrix = np.concatenate(
                 [np.concatenate([s.private, s.open, s.test], axis=0) for s in splits.values()], axis=0
             )
-        else:
-            fit_matrix = np.concatenate([s.private for s in splits.values()], axis=0)
-        scaler = fit_scaler(fit_matrix)
+        scaler = fit_scaler(fit_matrix, config.normalization_mode)
 
         staging = config.output_path.parent / f"{config.output_path.name}.building"
         if staging.exists():
@@ -283,9 +284,7 @@ def run_full(config: DataPrepConfig) -> dict[str, Any]:
 
         deterministic_savez(
             staging / "scaler.npz",
-            min=scaler.min_,
-            max=scaler.max_,
-            constant_mask=scaler.constant_mask,
+            **scaler.to_arrays(),
             mode=np.array(config.normalization_mode.value),
         )
 

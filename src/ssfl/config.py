@@ -53,6 +53,11 @@ class Scenario(int, Enum):
 class NormalizationMode(str, Enum):
     all_mini = "all_mini"
     private_only = "private_only"
+    # Rank/quantile transform, fitted over the same rows as all_mini. Min-max cannot represent
+    # the gafgyt.tcp/gafgyt.udp difference: those features span ~1.5e9 while the two classes
+    # differ by ~183 raw units, which is 2 float32 ULPs after any affine map. A rank transform
+    # is monotone but non-affine, so the gap becomes the sample count between the two values.
+    quantile = "quantile"
 
 
 class ThresholdPolicy(str, Enum):
