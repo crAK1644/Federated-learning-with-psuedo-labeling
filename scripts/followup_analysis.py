@@ -760,6 +760,12 @@ def emit_memo(q1: dict, q2: dict, q6: dict) -> str:
         r"\texttt{--normalization-mode quantile}, the rank transform of Section 1, which is the "
         r"only arm in the matrix with a mechanism that addresses the measured cause.",
         "",
+        r"That arm is wired and executes: a two-round smoke run against the quantile dataset "
+        r"completed end to end on the GPU host, with the rank scaler fitting, serialising to "
+        r"\texttt{scaler.npz}, reloading in all 27 clients and training without divergence. Two "
+        r"rounds carry no information about the collapse, which locks in at round 3--10; the run "
+        r"establishes only that the arm is ready to be spent, not what it will show.",
+        "",
         "Success criterion, unchanged from the main report's Section 25.B: at round 50 both "
         "flooding classes have non-zero recall while merged-pair detection quality (about 98\\%) "
         "is preserved. The prediction is now sharp and cheap to falsify: six of the seven arms "
