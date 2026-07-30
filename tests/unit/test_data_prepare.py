@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ssfl.config import DataPrepConfig
+from ssfl.config import DataPrepConfig, NormalizationMode
 from ssfl.data.discovery import (
     DataDiscoveryError,
     discover_source_files,
@@ -158,6 +158,39 @@ def test_fit_scaler_handles_constant_feature() -> None:
     x[:, 1] = 5.0  # constant
     x[:, 2] = np.arange(10) * 2
     scaler = fit_scaler(x)
+    out = scaler.transform(x)
+    assert np.allclose(out[:, 1], 0.0)
+    assert np.isclose(out[:, 0].min(), 0.0) and np.isclose(out[:, 0].max(), 1.0)
+
+
+def test_quantile_scaler_separates_what_minmax_quantises_away() -> None:
+    """The gafgyt.tcp/gafgyt.udp geometry in miniature.
+
+    One feature spans a huge range while the two groups of interest differ by a sliver of it.
+    Min-max in float32 collapses that sliver to a couple of ULPs; the rank transform turns it
+    into the fraction of samples lying between the two values.
+    """
+    big, small = 1.5e9, 183.0
+    a = np.full(500, big, dtype=np.float64)
+    b = np.full(500, big + small, dtype=np.float64)
+    spread = np.linspace(0.0, 3.0e9, 1000)  # gives the feature its 1.5e9-scale range
+    x = np.concatenate([a, b, spread]).reshape(-1, 1)
+
+    mm = fit_scaler(x, NormalizationMode.all_mini).transform(x)
+    qt = fit_scaler(x, NormalizationMode.quantile).transform(x)
+
+    mm_gap = abs(float(mm[0, 0]) - float(mm[500, 0]))
+    qt_gap = abs(float(qt[0, 0]) - float(qt[500, 0]))
+    assert mm_gap < 4 * np.spacing(np.float32(mm[0, 0]))  # a few float32 ULPs, unusable
+    assert qt_gap > 0.1  # ~1000 of 2000 samples sit between the two values
+    assert np.all(np.diff(qt[np.argsort(x[:, 0]), 0]) >= 0)  # transform stays monotone
+
+
+def test_quantile_scaler_handles_constant_feature() -> None:
+    x = np.zeros((10, 2), dtype=np.float32)
+    x[:, 0] = np.arange(10)
+    x[:, 1] = 5.0  # constant
+    scaler = fit_scaler(x, NormalizationMode.quantile)
     out = scaler.transform(x)
     assert np.allclose(out[:, 1], 0.0)
     assert np.isclose(out[:, 0].min(), 0.0) and np.isclose(out[:, 0].max(), 1.0)

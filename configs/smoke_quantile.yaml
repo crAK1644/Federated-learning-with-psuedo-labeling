@@ -1,0 +1,46 @@
+# CPU smoke profile for the quantile-normalisation arm: identical to smoke.yaml except for
+# data_path. Requires a second prepared dataset:
+#   uv run python -m ssfl.data.prepare_data --input data --output artifacts/data_quantile \
+#       --seed 2023 --normalization-mode quantile
+#
+# Why this arm exists: under the shipped global min-max, gafgyt.tcp and gafgyt.udp each collapse
+# onto a single 115-d point and the two points differ by 2 float32 ULPs, so no client can tell
+# them apart and the consensus merges them by round 3-10. That gap is invariant under every
+# affine normalisation (min-max, z-score, robust, log1p) because the five discriminating features
+# span ~1.5e9 while the classes differ by ~183 raw units. The rank transform is monotone but not
+# affine, which lifts a linear probe on the pair from 0.5008 to 0.9889 (ceiling 0.9894 -- 38
+# gafgyt.tcp rows land exactly on the gafgyt.udp vector).
+profile: smoke_quantile
+run_kind: extension
+algorithm: ssfl
+backbone: cnn
+scenario: 1
+seed: 2023
+
+data_path: artifacts/data_quantile
+output_path: artifacts/runs
+
+num_server_rounds: 2
+local_epochs: 1
+batch_size: 16
+paper_text_batch: false
+learning_rate: 1.0e-4
+device: cpu
+deterministic: true
+
+ssfl_threshold_policy: median
+ssfl_discriminator_mode: enabled
+ssfl_voting_mode: enabled
+ssfl_label_representation: hard
+ssfl_soft_label_round_decimals: null
+
+dsfl_temperature: 0.1
+
+checkpoint_interval: 1
+checkpoint_rounds: [1, 2]
+logging_interval: 1
+log_every_batch: false
+
+client_num_cpus: 1.0
+client_num_gpus: 0.0
+max_concurrent_clients: 8
