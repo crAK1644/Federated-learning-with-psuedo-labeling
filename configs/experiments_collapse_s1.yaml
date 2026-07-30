@@ -1,0 +1,31 @@
+# Minimum decisive arm of experiments_collapse.yaml: baseline vs quantile normalisation,
+# scenario 1, three seeds. Six 50-round runs (~2.0 h each on an RTX 3090, ~12 h total).
+#
+# The other five arms (confidence thresholds, soft labels, vote margin) are predicted failures
+# -- see the header of experiments_collapse.yaml -- so they confirm rather than answer. Run
+# this file first; run the full 42-entry matrix only if the result warrants it.
+#
+# Needs both prepared datasets:
+#   uv run python -m ssfl.data.prepare_data --input data_raw --output artifacts/data \
+#       --seed 2023 --normalization-mode all_mini
+#   uv run python -m ssfl.data.prepare_data --input data_raw --output artifacts/data_quantile \
+#       --seed 2023 --normalization-mode quantile
+entries:
+- name: collapse_base_s1_seed2023
+  base_profile: collapse_probe
+  overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023}
+- name: collapse_base_s1_seed2024
+  base_profile: collapse_probe
+  overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2024}
+- name: collapse_base_s1_seed2025
+  base_profile: collapse_probe
+  overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2025}
+- name: collapse_quantile_s1_seed2023
+  base_profile: collapse_probe
+  overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023, data_path: artifacts/data_quantile}
+- name: collapse_quantile_s1_seed2024
+  base_profile: collapse_probe
+  overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2024, data_path: artifacts/data_quantile}
+- name: collapse_quantile_s1_seed2025
+  base_profile: collapse_probe
+  overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2025, data_path: artifacts/data_quantile}
