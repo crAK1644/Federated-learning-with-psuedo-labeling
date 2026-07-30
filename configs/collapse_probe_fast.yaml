@@ -1,0 +1,48 @@
+# Fast collapse probe: collapse_probe.yaml at 10 rounds, all 27 clients in one wave.
+#
+# Two changes from collapse_probe.yaml, both about wall clock, neither about the measurement:
+#
+# 1. 10 rounds instead of 50. The gafgyt.tcp/gafgyt.udp consensus merge locks in at round 3-10
+#    in every scenario (report Table T21, "Cons cl rd" = 4/10/3), so the collapse is fully
+#    visible by round 10; the remaining 40 rounds only confirm it.
+# 2. 27 concurrent ClientApp actors instead of 8. Concurrency is min(1/client_num_gpus,
+#    max_concurrent_clients), so 0.125/8 ran 27 clients as 4 sequential waves per exchange, and
+#    SSFL does 2 exchanges per round -- 8 waves of GPU launch overhead per round for a model
+#    that allocates 74.5 MB. One wave of 27 costs ~12 GB of the 3090's 24 GB.
+#
+# Everything else is identical to collapse_probe.yaml, so results stay comparable.
+profile: collapse_probe_fast
+run_kind: paper
+algorithm: ssfl
+backbone: cnn
+scenario: 1
+seed: 2023
+
+data_path: artifacts/data
+output_path: artifacts/runs
+
+num_server_rounds: 10
+local_epochs: 5
+batch_size: 80
+paper_text_batch: false
+learning_rate: 1.0e-4
+device: cuda
+deterministic: true
+
+ssfl_threshold_policy: median
+ssfl_discriminator_mode: enabled
+ssfl_voting_mode: enabled
+ssfl_label_representation: hard
+ssfl_soft_label_round_decimals: null
+ssfl_vote_margin: 0
+
+dsfl_temperature: 0.1
+
+checkpoint_interval: 1
+checkpoint_rounds: [5, 10]
+logging_interval: 1
+log_every_batch: false
+
+client_num_cpus: 1.0
+client_num_gpus: 0.03 # 1/0.03 = 33 slots, so max_concurrent_clients is the binding limit
+max_concurrent_clients: 27

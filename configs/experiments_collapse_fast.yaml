@@ -1,0 +1,21 @@
+# Fast quantile-vs-baseline check: 2 runs, 10 rounds, scenario 1, seed 2023.
+#
+# This is the decisive comparison from experiments_collapse.yaml stripped to its minimum. Every
+# other arm in that matrix is affine and therefore predicted not to move (see its header); the
+# only arm with a mechanism is quantile. Two runs answer the question, 42 confirm it.
+#
+# The quantile arm needs the second prepared dataset:
+#   uv run python -m ssfl.data.prepare_data --input data --output artifacts/data_quantile \
+#       --seed 2023 --normalization-mode quantile
+#
+# Read the result in artifacts/runs/<run_id>/per_class_metrics.parquet, labels 4 (gafgyt.tcp) and
+# 5 (gafgyt.udp). Baseline is expected to hold tcp recall at 0.0; quantile is the arm that can
+# move it.
+
+entries:
+  - name: fast_base_s1_seed2023
+    base_profile: collapse_probe_fast
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023}
+  - name: fast_quantile_s1_seed2023
+    base_profile: collapse_probe_fast
+    overrides: {algorithm: ssfl, backbone: cnn, scenario: 1, seed: 2023, data_path: artifacts/data_quantile}
