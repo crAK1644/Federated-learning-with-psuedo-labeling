@@ -3,13 +3,17 @@
 #   uv run python -m ssfl.data.prepare_data --input data --output artifacts/data_quantile \
 #       --seed 2023 --normalization-mode quantile
 #
-# Why this arm exists: under the shipped global min-max, gafgyt.tcp and gafgyt.udp each collapse
-# onto a single 115-d point and the two points differ by 2 float32 ULPs, so no client can tell
-# them apart and the consensus merges them by round 3-10. That gap is invariant under every
-# affine normalisation (min-max, z-score, robust, log1p) because the five discriminating features
-# span ~1.5e9 while the classes differ by ~183 raw units. The rank transform is monotone but not
-# affine, which lifts a linear probe on the pair from 0.5008 to 0.9889 (ceiling 0.9894 -- 38
-# gafgyt.tcp rows land exactly on the gafgyt.udp vector).
+# Why this arm exists: under the shipped global min-max, gafgyt.tcp and gafgyt.udp collapse onto
+# 5 and 1 distinct 115-d points respectively, so no client can tell them apart and the consensus
+# merges them by round 3-10. That gap is invariant under every affine normalisation (min-max,
+# z-score, robust, log1p) because the five discriminating features span ~1.5e9 while the classes
+# differ by ~183 raw units. The rank transform is monotone but not affine, which lifts a linear
+# probe on the pair from 0.5008 to 0.9961 with zero cross-class collisions.
+#
+# Requires the float64 loader fix (REPRODUCIBILITY.md #31). Before it, this profile was a no-op:
+# the rows were already identical at CSV-read time, and ranking identical values returns identical
+# ranks. An earlier version of this comment cited 0.9889 with a 0.9894 ceiling -- that was measured
+# on the quantised tree and is withdrawn.
 profile: smoke_quantile
 run_kind: extension
 algorithm: ssfl

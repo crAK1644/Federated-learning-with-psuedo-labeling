@@ -1,0 +1,39 @@
+# 50-round scenario-1 (27 clients) run on the quantile dataset, RTX 3090.
+# Paper hyperparameters, shortened schedule -- this is a research extension, not a paper result.
+# Pair with configs/gpu50_baseline.yaml, which is identical except for data_path.
+# Needs a tree prepared with --normalization-mode quantile AND the float64 loader fix
+# (REPRODUCIBILITY.md #31) -- on a checkout without that fix the quantile tree is a no-op.
+profile: gpu50_quantile
+run_kind: extension
+algorithm: ssfl
+backbone: cnn
+scenario: 1
+seed: 2023
+
+data_path: artifacts/data_quantile
+output_path: artifacts/runs
+
+num_server_rounds: 50
+local_epochs: 5
+batch_size: 80
+paper_text_batch: false
+learning_rate: 1.0e-4
+device: cuda
+deterministic: true
+
+ssfl_threshold_policy: median
+ssfl_discriminator_mode: enabled
+ssfl_voting_mode: enabled
+ssfl_label_representation: hard
+ssfl_soft_label_round_decimals: null
+
+dsfl_temperature: 0.1
+
+checkpoint_interval: 1
+checkpoint_rounds: [10, 25, 50]
+logging_interval: 1
+log_every_batch: false
+
+client_num_cpus: 1.0
+client_num_gpus: 0.125 # 8 concurrent ClientApp actors on one 24-GB RTX 3090
+max_concurrent_clients: 8
