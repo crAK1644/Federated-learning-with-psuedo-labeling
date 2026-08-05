@@ -19,6 +19,12 @@ def ensure_extracted(input_path: Path, extract_dir: Path) -> Path:
     if input_path.is_dir():
         return input_path
 
+    if not input_path.exists():
+        raise FileNotFoundError(
+            f"input path {input_path} does not exist; pass a directory of N-BaIoT CSVs "
+            "or a .zip archive of them"
+        )
+
     suffix = input_path.suffix.lower()
     if suffix == ".zip":
         extract_dir.mkdir(parents=True, exist_ok=True)

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from ssfl.config import DataPrepConfig, NormalizationMode
+from ssfl.data.archive import UnsupportedArchiveError, ensure_extracted
 from ssfl.data.discovery import (
     DataDiscoveryError,
     discover_source_files,
@@ -323,3 +324,15 @@ def test_run_full_rerun_swaps_atomically(synthetic_dataset, tmp_path) -> None:
     assert (output / "dataset_manifest.json").exists()
     assert not (output.parent / f"{output.name}.previous").exists()
     assert not (output.parent / f"{output.name}.building").exists()
+
+
+def test_ensure_extracted_reports_missing_path_not_archive_type(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        ensure_extracted(tmp_path / "absent", tmp_path / "extract")
+
+
+def test_ensure_extracted_still_rejects_unknown_suffix(tmp_path) -> None:
+    bogus = tmp_path / "data.tar.gz"
+    bogus.write_bytes(b"not a zip")
+    with pytest.raises(UnsupportedArchiveError):
+        ensure_extracted(bogus, tmp_path / "extract")
