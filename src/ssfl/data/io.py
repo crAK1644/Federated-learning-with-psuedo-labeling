@@ -38,13 +38,21 @@ def load_reference_feature_columns(input_path) -> list[str] | None:
 
 
 def load_source_matrix(source: SourceFile) -> tuple[np.ndarray, list[str]]:
-    """Read one source CSV into a ``(num_rows, 115)`` float32 matrix, preserving column order."""
+    """Read one source CSV into a ``(num_rows, 115)`` float64 matrix, preserving column order.
+
+    float64 is load-bearing, not defensive. The ``HH_jit_*_variance`` columns reach ~5.7e17, where
+    one float32 step is ~3.4e10 -- casting at load quantises 46 of the 115 features and merges rows
+    that differ by real amounts. Measured on ``Danmini_Doorbell/gafgyt_attacks/tcp.csv``: 85,227
+    distinct rows in float64 collapse to 94 in float32. No scaler can undo that, because it happens
+    before any scaler sees the data. Splits are cast back to float32 after scaling
+    (``prepare_data.py``), where values live in [0, 1] and float32 has resolution to spare.
+    """
     table = pv.read_csv(source.path)
     columns = table.column_names
     arrays = []
     for col in table.columns:
-        arrays.append(col.to_numpy(zero_copy_only=False).astype(np.float32, copy=False))
-    matrix = np.column_stack(arrays) if arrays else np.empty((table.num_rows, 0), dtype=np.float32)
+        arrays.append(col.to_numpy(zero_copy_only=False).astype(np.float64, copy=False))
+    matrix = np.column_stack(arrays) if arrays else np.empty((table.num_rows, 0), dtype=np.float64)
     return matrix, columns
 
 

@@ -97,6 +97,25 @@ def test_validate_source_file_rejects_nan(tmp_path) -> None:
         validate_source_file(source, matrix, columns, columns, min_rows=10)
 
 
+def test_load_source_matrix_preserves_rows_that_float32_would_merge(tmp_path) -> None:
+    """The real ``HH_jit_*_variance`` columns reach ~5.7e17, where a float32 step is ~3.4e10.
+    Loading at float32 merged distinct rows before any scaler ran; float64 must keep them apart."""
+    root = tmp_path / "raw"
+    make_synthetic_dataset(root, rows_per_file=10)
+    source = discover_source_files(root)[0]
+    big = 5.669e17
+    rows = [[big + k * 1e9] * NUM_FEATURES for k in range(10)]
+    with open(source.path, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(FEATURE_NAMES)
+        writer.writerows(rows)
+
+    matrix, _ = load_source_matrix(source)
+    assert matrix.dtype == np.float64
+    assert len(np.unique(matrix, axis=0)) == 10
+    assert len(np.unique(matrix.astype(np.float32), axis=0)) < 10  # what the old loader produced
+
+
 def test_validate_source_file_rejects_too_few_rows(synthetic_dataset) -> None:
     files = discover_source_files(synthetic_dataset)
     source = files[0]

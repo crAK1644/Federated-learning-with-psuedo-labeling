@@ -44,6 +44,11 @@ class QuantileScaler:
     monotone but non-affine -- the gap becomes the number of fit samples lying between the two
     values, which for those features is thousands.
 
+    This only helps if the fit matrix still holds the distinctions. It is why ``load_source_matrix``
+    reads float64: under the old float32 load the rows were already identical here, and ranking
+    identical values returns identical ranks, so this scaler was a no-op for the pair it exists to
+    separate.
+
     Stored ragged (one sorted unique-value array per feature) as three flat arrays, because the
     per-feature unique counts range from a handful to tens of thousands.
     """
