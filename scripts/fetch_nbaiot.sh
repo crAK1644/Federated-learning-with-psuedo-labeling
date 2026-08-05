@@ -32,9 +32,20 @@ done
 
 # ponytail: bsdtar is the RAR reader -- libarchive has RAR support built in and ships with macOS,
 # so this avoids depending on unar/unrar or the rarfile package just to unpack 17 archives.
-command -v bsdtar >/dev/null || { echo "bsdtar not found (needed to read the .rar attack files)" >&2; exit 1; }
+# On Debian/Ubuntu it is not installed by default; it lives in the libarchive-tools package.
+command -v bsdtar >/dev/null || {
+  echo "bsdtar not found (needed to read the .rar attack files)" >&2
+  echo "  Debian/Ubuntu: sudo apt install libarchive-tools" >&2
+  exit 1
+}
+command -v unzip >/dev/null || {
+  echo "unzip not found" >&2
+  echo "  Debian/Ubuntu: sudo apt install unzip" >&2
+  exit 1
+}
 
-free_gib=$(df -g "$(dirname "$OUT")" | awk 'NR==2 {print $4}')
+# POSIX -Pk rather than -g: macOS df takes -g, GNU coreutils df does not.
+free_gib=$(df -Pk "$(dirname "$OUT")" | awk 'NR==2 {print int($4 / 1048576)}')
 if [ "$free_gib" -lt "$MIN_FREE_GIB" ]; then
   echo "only ${free_gib} GiB free, need ${MIN_FREE_GIB}; refusing to unpack" >&2
   exit 1
