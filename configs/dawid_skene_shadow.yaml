@@ -6,8 +6,17 @@
 # disagreement, latency, and permutation-check behaviour before any Dawid-Skene label reaches
 # training.
 #
-# run_kind: extension is enforced by ExperimentConfig: these runs must never land in canonical
-# paper cells.
+# This profile is configs/paper.yaml with the Dawid-Skene block changed and nothing else. Three
+# non-Dawid-Skene fields also differ, and all three follow from truncating the run rather than from
+# any change of arm:
+#
+#   run_kind          paper -> extension   forced by ExperimentConfig for non-majority aggregation
+#   num_server_rounds 200 -> 50            50-round trial; set both back to 200 for the confirmatory run
+#   checkpoint_rounds ...200 -> ...50      a 50-round run cannot checkpoint round 200
+#
+# Because shadow broadcasts majority, this run should land on the completed
+# ssfl-s1-gpu50_baseline accuracy (0.7336) -- same seed, same data, same paper settings. A material
+# gap means the Dawid-Skene path perturbed something it was asserted not to touch.
 profile: dawid_skene_shadow
 run_kind: extension
 algorithm: ssfl

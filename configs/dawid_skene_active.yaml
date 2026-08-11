@@ -2,12 +2,21 @@
 # does not (insufficient support, non-finite values, non-convergence, failed permutation check).
 #
 # Only run this after the Stage 0 offline gate and a shadow run, per the staged sequence in
-# output/pdf/dawid_skene_server_changes.pdf. The matched comparison is this profile against
-# configs/paper.yaml settings with ssfl_hard_aggregation left at majority: scenario 1, five seeds,
-# one host, one dataset manifest hash, and only ExperimentConfig.seed varying.
+# output/pdf/dawid_skene_server_changes.pdf.
 #
-# run_kind: extension is enforced by ExperimentConfig: these runs must never land in canonical
-# paper cells.
+# This profile is configs/paper.yaml with ONE field changed -- ssfl_hard_aggregation. Every other
+# dawid_skene_* value below equals its ExperimentConfig default and is written out only so the
+# settings under test are visible in one place; `uv run python -c` diffing this against paper.yaml
+# reports exactly one Dawid-Skene field. Three non-Dawid-Skene fields also differ, and all three
+# follow from truncating the run rather than from any change of arm:
+#
+#   run_kind          paper -> extension   forced by ExperimentConfig for non-majority aggregation
+#   num_server_rounds 200 -> 50            50-round trial; set both back to 200 for the confirmatory run
+#   checkpoint_rounds ...200 -> ...50      a 50-round run cannot checkpoint round 200
+#
+# The completed ssfl-s1-gpu50_baseline run (accuracy 0.7336) carries the same three deviations and
+# is otherwise majority-aggregated paper config, so it is the matched control: one host, one
+# dataset manifest hash, scenario 1, seed 2023, only the aggregator differing.
 profile: dawid_skene_active
 run_kind: extension
 algorithm: ssfl
