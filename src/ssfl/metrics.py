@@ -10,6 +10,7 @@ REPRODUCIBILITY.md). Any such audit belongs in the M8 reporting layer, which rea
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -150,7 +151,10 @@ class MetricsLedger:
         train_loss: float | None = None,
         metrics: ClassificationMetrics | None = None,
         valid_rate: float | None = None,
+        extra: Mapping[str, float] | None = None,
     ) -> None:
+        """``extra`` adds protocol-specific scalar columns (currently the SSFL ``ds_*``
+        Dawid-Skene diagnostics). Rounds that pass nothing simply leave those columns null."""
         self._replace_round(algorithm, scenario, round)
         row = {
             "algorithm": algorithm,
@@ -190,6 +194,7 @@ class MetricsLedger:
                         "support": int(metrics.per_class_support[class_index]),
                     }
                 )
+        row.update(extra or {})
         self.rows.append(row)
         if self.run_dir is not None:
             self.write(self.run_dir)

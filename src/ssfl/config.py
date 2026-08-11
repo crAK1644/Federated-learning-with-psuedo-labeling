@@ -86,6 +86,18 @@ class LabelRepresentation(str, Enum):
     soft = "soft"
 
 
+class HardAggregation(str, Enum):
+    """How the server turns validated hard client proposals into one global label per sample.
+
+    ``dawid_skene_shadow`` fits the estimator and records its diagnostics but broadcasts the
+    majority labels, so it is a control arm: it must change no broadcast byte and consume no RNG.
+    """
+
+    majority = "majority"
+    dawid_skene_shadow = "dawid_skene_shadow"
+    dawid_skene = "dawid_skene"
+
+
 class DeviceKind(str, Enum):
     cpu = "cpu"
     cuda = "cuda"
@@ -194,6 +206,29 @@ class ExperimentConfig(BaseModel):
     ssfl_label_representation: LabelRepresentation = LabelRepresentation.hard
     ssfl_soft_label_round_decimals: int | None = None
 
+    # --- Dawid-Skene server-side aggregation (research extension) ----------
+    # Server-only: none of these change the wire contract. Majority stays the default and the
+    # fallback. See DAWID_SKENE_FEASIBILITY_PLAN.md and output/pdf/dawid_skene_server_changes.pdf.
+    ssfl_hard_aggregation: HardAggregation = HardAggregation.majority
+    dawid_skene_warmup_rounds: int = 0
+    dawid_skene_max_iterations: int = 100
+    dawid_skene_min_iterations: int = 2
+    dawid_skene_tolerance: float = 1e-6
+    dawid_skene_initialization_pseudocount: float = 0.01
+    dawid_skene_confusion_pseudocount: float = 0.1
+    dawid_skene_class_prior_pseudocount: float = 1.0
+    dawid_skene_min_item_annotations: int = 1
+    dawid_skene_min_client_annotations: int = 1
+    dawid_skene_min_clients: int = 3
+    dawid_skene_posterior_threshold: float = 0.0
+    dawid_skene_damping: float = 1.0
+    dawid_skene_epsilon: float = 1e-12
+    dawid_skene_warm_start: bool = False
+    dawid_skene_permutation_min_diagonal_fraction: float = 0.5
+    dawid_skene_permutation_min_majority_agreement: float = 0.5
+    dawid_skene_save_annotations: bool = False
+    dawid_skene_annotation_rounds: tuple[int, ...] = ()
+
     # --- DS-FL-specific ------------------------------------------------
     dsfl_temperature: float = 0.1
 
@@ -237,6 +272,67 @@ class ExperimentConfig(BaseModel):
                 raise ValueError(
                     "ssfl_soft_label_round_decimals must be unset when using hard labels"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _check_dawid_skene(self) -> "ExperimentConfig":
+        if self.dawid_skene_warm_start:
+            raise ValueError(
+                "dawid_skene_warm_start is not supported: confusion matrices are round-specific "
+                "aggregation variables, not persistent client reputation scores"
+            )
+        if self.ssfl_hard_aggregation == HardAggregation.majority:
+            return self
+        if self.algorithm != Algorithm.ssfl:
+            raise ValueError(
+                f"ssfl_hard_aggregation={self.ssfl_hard_aggregation.value} applies to "
+                f"algorithm=ssfl only, got algorithm={self.algorithm.value}"
+            )
+        if self.ssfl_label_representation != LabelRepresentation.hard:
+            raise ValueError(
+                "Dawid-Skene aggregates hard labels; it requires "
+                "ssfl_label_representation=hard and ssfl_voting_mode=enabled"
+            )
+        if self.run_kind != RunKind.extension:
+            raise ValueError(
+                "Dawid-Skene aggregation is a research extension: set run_kind=extension so it "
+                "cannot be reported in canonical paper cells"
+            )
+        if self.dawid_skene_min_iterations < 1:
+            raise ValueError("dawid_skene_min_iterations must be >= 1")
+        if self.dawid_skene_max_iterations < self.dawid_skene_min_iterations:
+            raise ValueError("dawid_skene_max_iterations must be >= dawid_skene_min_iterations")
+        if self.dawid_skene_tolerance <= 0 or self.dawid_skene_epsilon <= 0:
+            raise ValueError("dawid_skene_tolerance and dawid_skene_epsilon must be > 0")
+        if not 0.0 < self.dawid_skene_damping <= 1.0:
+            raise ValueError("dawid_skene_damping must be in (0, 1]")
+        if not 0.0 <= self.dawid_skene_posterior_threshold <= 1.0:
+            raise ValueError("dawid_skene_posterior_threshold must be in [0, 1]")
+        if self.dawid_skene_min_clients < 2:
+            raise ValueError(
+                "dawid_skene_min_clients must be >= 2: a latent-class model with fewer than two "
+                "views is not identifiable"
+            )
+        if self.dawid_skene_min_item_annotations < 1 or self.dawid_skene_min_client_annotations < 1:
+            raise ValueError("dawid_skene_min_* annotation floors must be >= 1")
+        if self.dawid_skene_warmup_rounds < 0:
+            raise ValueError("dawid_skene_warmup_rounds must be >= 0")
+        for name in (
+            "dawid_skene_permutation_min_diagonal_fraction",
+            "dawid_skene_permutation_min_majority_agreement",
+        ):
+            if not 0.0 <= getattr(self, name) <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
+        for value in (
+            self.dawid_skene_initialization_pseudocount,
+            self.dawid_skene_confusion_pseudocount,
+            self.dawid_skene_class_prior_pseudocount,
+        ):
+            if value < 0:
+                raise ValueError("dawid_skene pseudocounts must be >= 0")
+        bad_rounds = [r for r in self.dawid_skene_annotation_rounds if r < 1]
+        if bad_rounds:
+            raise ValueError(f"dawid_skene_annotation_rounds must be >= 1, got {bad_rounds}")
         return self
 
     @model_validator(mode="after")

@@ -7,6 +7,7 @@ cross the wire -- never model parameters, matching the privacy boundary tested i
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -17,12 +18,42 @@ from flwr.serverapp import Grid
 from flwr.serverapp.strategy import Strategy
 from flwr.serverapp.strategy.strategy_utils import aggregate_metricrecords, sample_nodes
 
-from ssfl.config import Algorithm, VotingMode
+from ssfl.config import Algorithm, HardAggregation, VotingMode
 from ssfl.models import NUM_CLASSES
+from ssfl.protocols.dawid_skene import (
+    DawidSkeneFit,
+    DawidSkeneSettings,
+    build_annotation_matrix,
+    fit_dawid_skene,
+)
 from ssfl.protocols.message import Envelope, ExpectedContext, ProtocolError, validate_envelope
 from ssfl.protocols.payload_limits import validate_ssfl_proposal_arrays
 from ssfl.protocols.ssfl import ProposalResult, aggregate_soft, aggregate_votes
 from ssfl.records import array_record_from_numpy, numpy_from_array_record
+
+# MetricRecord holds numbers only, so the Dawid-Skene outcome is reported as a code. 0 is the only
+# value in which Dawid-Skene labels were broadcast; everything else fell back to majority.
+DS_STATUS_CODES = {
+    "ok": 0,
+    "not_attempted": 1,
+    "warmup": 2,
+    "no_annotations": 3,
+    "no_observations": 4,
+    "insufficient_clients": 5,
+    "non_finite_parameters": 6,
+    "non_finite_posterior": 7,
+    "non_finite_objective": 8,
+    "normalization_invariant_failed": 9,
+    "objective_decreased": 10,
+    "not_converged": 11,
+    "permutation_check_diagonal": 12,
+    "permutation_check_agreement": 13,
+    "estimator_error": 14,
+}
+
+
+def _finite(value: float) -> float:
+    return float(value) if np.isfinite(value) else 0.0
 
 
 class SSFLStrategy(Strategy):
@@ -34,6 +65,11 @@ class SSFLStrategy(Strategy):
         num_clients: int,
         voting_mode: VotingMode = VotingMode.enabled,
         audit_dir: Path | None = None,
+        hard_aggregation: HardAggregation = HardAggregation.majority,
+        dawid_skene_settings: DawidSkeneSettings | None = None,
+        dawid_skene_warmup_rounds: int = 0,
+        save_annotations: bool = False,
+        annotation_rounds: tuple[int, ...] = (),
     ) -> None:
         self.scenario = scenario
         self.dataset_manifest_hash = dataset_manifest_hash
@@ -41,6 +77,12 @@ class SSFLStrategy(Strategy):
         self.num_clients = num_clients
         self.voting_mode = voting_mode
         self.audit_dir = audit_dir
+        self.hard_aggregation = hard_aggregation
+        self.dawid_skene_settings = dawid_skene_settings or DawidSkeneSettings()
+        self.dawid_skene_warmup_rounds = dawid_skene_warmup_rounds
+        self.save_annotations = save_annotations
+        self.annotation_rounds = annotation_rounds
+        self.last_dawid_skene_metrics: dict[str, float] = {}
         self._current_node_ids: list[int] = []
 
     def summary(self) -> None:
@@ -124,17 +166,35 @@ class SSFLStrategy(Strategy):
             result = aggregate_votes(proposals, num_open=self.num_open, num_classes=NUM_CLASSES)
         else:
             result = aggregate_soft(proposals, num_open=self.num_open, num_classes=NUM_CLASSES)
+
+        annotations, ds_fit, ds_seconds, ds_reason = self._dawid_skene(
+            server_round, proposals, result
+        )
+        broadcast_labels, broadcast_mask = result.global_labels, result.valid_mask
+        if self.hard_aggregation == HardAggregation.dawid_skene and ds_fit is not None:
+            if ds_fit.ok:
+                broadcast_labels, broadcast_mask = ds_fit.labels, ds_fit.valid_mask
         if self.audit_dir is not None:
             self.audit_dir.mkdir(parents=True, exist_ok=True)
             audit_path = self.audit_dir / f"ssfl_aggregation_round_{server_round}.npz"
             audit_tmp = audit_path.with_suffix(".tmp.npz")
-            np.savez_compressed(
-                audit_tmp,
-                votes_per_class=result.votes_per_class,
-                participating_counts=result.participating_counts,
-                global_labels=result.global_labels.astype(np.int8),
-                valid_mask=result.valid_mask,
-            )
+            payload = {
+                "votes_per_class": result.votes_per_class,
+                "participating_counts": result.participating_counts,
+                "global_labels": broadcast_labels.astype(np.int8),
+                "valid_mask": broadcast_mask,
+            }
+            if ds_fit is not None:
+                payload["majority_labels"] = result.global_labels.astype(np.int8)
+                payload["majority_valid_mask"] = result.valid_mask
+                payload["dawid_skene_labels"] = ds_fit.labels.astype(np.int8)
+                payload["dawid_skene_valid_mask"] = ds_fit.valid_mask
+                payload["dawid_skene_status"] = np.array(ds_fit.status)
+            if annotations is not None and self._save_annotations_this_round(server_round):
+                # Restricted diagnostic (DATA_CARD.md / the approval brief): raw client-by-sample
+                # labels are off by default and this audit is deleted once settings are locked.
+                payload["annotations"] = annotations
+            np.savez_compressed(audit_tmp, **payload)
             audit_tmp.replace(audit_path)
         valid_votes = result.votes_per_class[result.valid_mask]
         if len(valid_votes):
@@ -142,13 +202,17 @@ class SSFLStrategy(Strategy):
             vote_margins = sorted_votes[:, -1] - sorted_votes[:, -2]
         else:
             vote_margins = np.array([], dtype=np.int64)
-        label_counts = np.bincount(result.global_labels[result.valid_mask], minlength=NUM_CLASSES)
+        label_counts = np.bincount(broadcast_labels[broadcast_mask], minlength=NUM_CLASSES)
+        # Stashed so server_app can put the ds_* diagnostics in metrics.parquet next to accuracy:
+        # aggregate_train's return value never reaches the evaluate callback.
+        ds_metrics = self._dawid_skene_metrics(ds_fit, ds_seconds, ds_reason, result)
+        self.last_dawid_skene_metrics = ds_metrics
         arrays_out = array_record_from_numpy(
-            {"global_labels": result.global_labels.astype("int8"), "valid_mask": result.valid_mask}
+            {"global_labels": broadcast_labels.astype("int8"), "valid_mask": broadcast_mask}
         )
         metrics_out = MetricRecord(
             {
-                "valid_rate": float(result.valid_mask.mean()),
+                "valid_rate": float(broadcast_mask.mean()),
                 "tie_count": result.tie_count,
                 "all_abstain_count": result.all_abstain_count,
                 "num_proposals": len(proposals),
@@ -162,9 +226,89 @@ class SSFLStrategy(Strategy):
                     f"global_class_{index}_count": int(count)
                     for index, count in enumerate(label_counts)
                 },
+                **ds_metrics,
             }
         )
         return arrays_out, metrics_out
+
+    def _save_annotations_this_round(self, server_round: int) -> bool:
+        if not self.save_annotations:
+            return False
+        return not self.annotation_rounds or server_round in self.annotation_rounds
+
+    def _dawid_skene(
+        self, server_round: int, proposals, majority
+    ) -> tuple[np.ndarray | None, DawidSkeneFit | None, float, str]:
+        """Build the client-by-sample matrix and fit, or explain why not.
+
+        Runs in both shadow and active mode; only the caller's use of the result differs. Returns
+        ``(annotations, fit, seconds, reason)``; ``fit`` is None when no fit was attempted and
+        ``reason`` then names why.
+        """
+        if self.hard_aggregation == HardAggregation.majority:
+            return None, None, 0.0, "not_attempted"
+        if self.voting_mode != VotingMode.enabled:
+            return None, None, 0.0, "not_attempted"
+        annotations, senders = build_annotation_matrix(
+            [(envelope.sender_id, result.pseudo_labels) for envelope, result in proposals],
+            num_open=self.num_open,
+            num_classes=NUM_CLASSES,
+        )
+        if server_round <= self.dawid_skene_warmup_rounds:
+            # Early-round majority labels are close to noise (0.186 accurate at round 1 on the
+            # recorded scenario-1 run), so a fit there would estimate confusions from noise and
+            # steer distillation when it matters most. Warm-up is a reported setting, not a guess.
+            return annotations, None, 0.0, "warmup"
+        started = time.perf_counter()
+        try:
+            fit = fit_dawid_skene(
+                annotations,
+                num_classes=NUM_CLASSES,
+                majority_labels=majority.global_labels,
+                settings=self.dawid_skene_settings,
+                senders=senders,
+            )
+        except (ValueError, FloatingPointError, MemoryError):
+            # Any estimator defect falls back to majority rather than stopping the run; the code
+            # is visible in metrics so a run that silently degrades to majority is still auditable.
+            return annotations, None, time.perf_counter() - started, "estimator_error"
+        return annotations, fit, time.perf_counter() - started, fit.status
+
+    def _dawid_skene_metrics(
+        self, fit: DawidSkeneFit | None, seconds: float, reason: str, majority
+    ) -> dict[str, float | int]:
+        if self.hard_aggregation == HardAggregation.majority:
+            return {}
+        if fit is None:
+            return {
+                "ds_status": DS_STATUS_CODES.get(reason, DS_STATUS_CODES["estimator_error"]),
+                "ds_applied": 0,
+                "ds_seconds": float(seconds),
+            }
+        comparable = fit.valid_mask & majority.valid_mask
+        disagreement = (
+            float((fit.labels[comparable] != majority.global_labels[comparable]).mean())
+            if comparable.any()
+            else 0.0
+        )
+        return {
+            "ds_status": DS_STATUS_CODES.get(fit.status, DS_STATUS_CODES["estimator_error"]),
+            "ds_applied": int(fit.ok and self.hard_aggregation == HardAggregation.dawid_skene),
+            "ds_seconds": float(seconds),
+            "ds_iterations": fit.iterations,
+            "ds_converged": int(fit.converged),
+            # Non-finite is the normal reading on an early-failure path; 0.0 keeps a NaN out of
+            # metrics.parquet, and ds_status already says whether these two are meaningful.
+            "ds_log_likelihood": _finite(fit.log_likelihood),
+            "ds_objective": _finite(fit.objective),
+            "ds_eligible_clients": fit.eligible_clients,
+            "ds_excluded_clients": len(fit.excluded_clients),
+            "ds_diagonal_fraction": fit.diagonal_fraction,
+            "ds_majority_agreement": fit.majority_agreement,
+            "ds_max_posterior_mean": fit.max_posterior_mean,
+            "ds_disagreement_rate": disagreement,
+            "ds_valid_rate": float(fit.valid_mask.mean()),
+        }
 
     def configure_evaluate(
         self, server_round: int, arrays, config: ConfigRecord, grid: Grid

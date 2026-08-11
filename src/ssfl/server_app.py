@@ -31,6 +31,7 @@ from ssfl.run_context import RunContext, prune_superseded_checkpoints
 from ssfl.seeding import configure_determinism, seed_everything
 from ssfl.strategies.dsfl import DSFLStrategy
 from ssfl.strategies.fd import FDStrategy
+from ssfl.protocols.dawid_skene import DawidSkeneSettings
 from ssfl.strategies.ssfl import SSFLStrategy
 from ssfl.telemetry import JsonlEventWriter, SystemMonitor, filter_batch_events, gpu_snapshot
 
@@ -167,6 +168,11 @@ def main(grid: Grid, context: Context) -> None:
             num_clients=exp_config.num_clients(),
             voting_mode=exp_config.ssfl_voting_mode,
             audit_dir=run_context.attempt_dir / "aggregation_audit",
+            hard_aggregation=exp_config.ssfl_hard_aggregation,
+            dawid_skene_settings=DawidSkeneSettings.from_config(exp_config),
+            dawid_skene_warmup_rounds=exp_config.dawid_skene_warmup_rounds,
+            save_annotations=exp_config.dawid_skene_save_annotations,
+            annotation_rounds=exp_config.dawid_skene_annotation_rounds,
         )
         initial_arrays = ArrayRecord()
         seed_everything(exp_config.seed)
@@ -218,6 +224,7 @@ def main(grid: Grid, context: Context) -> None:
                 train_loss=train_loss,
                 metrics=classification,
                 valid_rate=float(valid_mask.mean()),
+                extra=strategy.last_dawid_skene_metrics,
             )
             return MetricRecord(
                 {

@@ -10,3 +10,8 @@ deployment/certs/*.pem
 deployment/generated/
 .venv
 .venv/
+# Run directories copied back from the GPU host, and scratch PDF extractions. Untracked anyway,
+# but they must also stay out of the Flower FAB: `flwr run` packs the app directory and 190+ MB of
+# recorded runs at the repo root pushes it past the 10 MB FAB limit.
+ssfl-s1-*/
+tmp/

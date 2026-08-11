@@ -1,0 +1,69 @@
+# Dawid-Skene active arm: broadcast the Dawid-Skene labels when the fit succeeds, majority when it
+# does not (insufficient support, non-finite values, non-convergence, failed permutation check).
+#
+# Only run this after the Stage 0 offline gate and a shadow run, per the staged sequence in
+# output/pdf/dawid_skene_server_changes.pdf. The matched comparison is this profile against
+# configs/paper.yaml settings with ssfl_hard_aggregation left at majority: scenario 1, five seeds,
+# one host, one dataset manifest hash, and only ExperimentConfig.seed varying.
+#
+# run_kind: extension is enforced by ExperimentConfig: these runs must never land in canonical
+# paper cells.
+profile: dawid_skene_active
+run_kind: extension
+algorithm: ssfl
+backbone: cnn
+scenario: 1
+seed: 2023
+
+data_path: artifacts/data
+output_path: artifacts/runs
+
+num_server_rounds: 50
+local_epochs: 5
+batch_size: 80
+paper_text_batch: false
+learning_rate: 1.0e-4
+device: auto
+deterministic: true
+
+ssfl_threshold_policy: median
+ssfl_discriminator_mode: enabled
+ssfl_voting_mode: enabled
+ssfl_label_representation: hard
+ssfl_soft_label_round_decimals: null
+
+# --- Dawid-Skene -------------------------------------------------------------------------------
+# Initial engineering values for review, not defaults reported by Dong et al. The confirmatory
+# values are chosen by the offline Stage 0 screen (scripts/ds_stage0.py), not tuned in live runs.
+ssfl_hard_aggregation: dawid_skene
+dawid_skene_warmup_rounds: 0
+dawid_skene_max_iterations: 100
+dawid_skene_min_iterations: 2
+dawid_skene_tolerance: 1.0e-6
+dawid_skene_initialization_pseudocount: 0.01
+dawid_skene_confusion_pseudocount: 0.1
+dawid_skene_class_prior_pseudocount: 1.0
+dawid_skene_min_item_annotations: 1
+dawid_skene_min_client_annotations: 1
+dawid_skene_min_clients: 3
+dawid_skene_posterior_threshold: 0.0
+dawid_skene_damping: 1.0
+dawid_skene_epsilon: 1.0e-12
+dawid_skene_warm_start: false
+dawid_skene_permutation_min_diagonal_fraction: 0.5
+dawid_skene_permutation_min_majority_agreement: 0.5
+# Restricted diagnostic: the client-by-sample label matrix. On only for the Stage 0 rounds, and
+# the audit is deleted once settings are locked (DATA_CARD.md / the approval brief's safeguards).
+dawid_skene_save_annotations: false
+dawid_skene_annotation_rounds: []
+
+dsfl_temperature: 0.1
+
+checkpoint_interval: 10
+checkpoint_rounds: [10, 50]
+logging_interval: 1
+log_every_batch: false
+
+client_num_cpus: 1.0
+client_num_gpus: 0.0
+max_concurrent_clients: 8
