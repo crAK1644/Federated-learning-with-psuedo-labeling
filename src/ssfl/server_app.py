@@ -41,6 +41,11 @@ app = ServerApp()
 @app.main()
 def main(grid: Grid, context: Context) -> None:
     requested_config = experiment_config_from_run_config(context.run_config)
+    # Before RunContext.create, because that is what snapshots environment.json -- called after it,
+    # the bundle records deterministic_algorithms_enabled/cudnn_deterministic as False on every run
+    # regardless of the config, which is exactly backwards for a reproducibility record. The call
+    # below the branch stays for the resume path, where exp_config may not be requested_config.
+    configure_determinism(requested_config.deterministic)
     if requested_config.resume_from is not None:
         run_context = RunContext.resume(requested_config.resume_from)
         exp_config = run_context.config

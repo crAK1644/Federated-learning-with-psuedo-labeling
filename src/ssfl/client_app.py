@@ -42,7 +42,7 @@ from ssfl.protocols.fl import client_train_step
 from ssfl.protocols.ssfl import AggregationResult, client_distillation_step, client_proposal_step
 from ssfl.records import array_record_from_numpy, numpy_from_array_record
 from ssfl.run_context import prune_superseded_checkpoints
-from ssfl.seeding import seed_everything
+from ssfl.seeding import configure_determinism, seed_everything
 from ssfl.telemetry import JsonlEventWriter, filter_batch_events, gpu_snapshot
 
 app = ClientApp()
@@ -538,6 +538,11 @@ def _dsfl_evaluate(
 @app.train()
 def client_train(message: Message, context: Context) -> Message:
     exp_config = experiment_config_from_run_config(context.run_config)
+    # Per Ray actor, not just per server: all training math runs here, so without this the
+    # deterministic=True contract covers only the server's aggregation and every client trains on
+    # nondeterministic cuDNN kernels. Two same-seed runs then disagree on ~78% of round-1 open-set
+    # proposals -- which is a noise floor large enough to swamp any effect being measured.
+    configure_determinism(exp_config.deterministic)
     device = resolve_device(exp_config.device, exp_config.deterministic)
     server_round = int(message.content["config"]["server-round"])
     client_id, assignment = _partition_client(context, exp_config)
@@ -597,6 +602,7 @@ def client_train(message: Message, context: Context) -> Message:
 @app.evaluate()
 def client_evaluate(message: Message, context: Context) -> Message:
     exp_config = experiment_config_from_run_config(context.run_config)
+    configure_determinism(exp_config.deterministic)
     device = resolve_device(exp_config.device, exp_config.deterministic)
     server_round = int(message.content["config"]["server-round"])
     client_id, assignment = _partition_client(context, exp_config)
