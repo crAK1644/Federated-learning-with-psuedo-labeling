@@ -224,7 +224,7 @@ class ExperimentConfig(BaseModel):
     dawid_skene_damping: float = 1.0
     dawid_skene_epsilon: float = 1e-12
     dawid_skene_warm_start: bool = False
-    dawid_skene_permutation_min_diagonal_fraction: float = 0.5
+    dawid_skene_permutation_min_diagonal_ratio: float = 0.7
     dawid_skene_permutation_min_majority_agreement: float = 0.5
     dawid_skene_save_annotations: bool = False
     dawid_skene_annotation_rounds: tuple[int, ...] = ()
@@ -318,7 +318,7 @@ class ExperimentConfig(BaseModel):
         if self.dawid_skene_warmup_rounds < 0:
             raise ValueError("dawid_skene_warmup_rounds must be >= 0")
         for name in (
-            "dawid_skene_permutation_min_diagonal_fraction",
+            "dawid_skene_permutation_min_diagonal_ratio",
             "dawid_skene_permutation_min_majority_agreement",
         ):
             if not 0.0 <= getattr(self, name) <= 1.0:

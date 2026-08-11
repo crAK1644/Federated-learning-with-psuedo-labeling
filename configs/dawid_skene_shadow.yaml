@@ -50,7 +50,7 @@ dawid_skene_posterior_threshold: 0.0
 dawid_skene_damping: 1.0
 dawid_skene_epsilon: 1.0e-12
 dawid_skene_warm_start: false
-dawid_skene_permutation_min_diagonal_fraction: 0.5
+dawid_skene_permutation_min_diagonal_ratio: 0.7
 dawid_skene_permutation_min_majority_agreement: 0.5
 # Restricted diagnostic: the client-by-sample label matrix. On only for the Stage 0 rounds, and
 # the audit is deleted once settings are locked (DATA_CARD.md / the approval brief's safeguards).

@@ -46,7 +46,9 @@ class DawidSkeneSettings:
     posterior_threshold: float = 0.0
     damping: float = 1.0
     epsilon: float = 1e-12
-    permutation_min_diagonal_fraction: float = 0.5
+    # Fraction of majority's own diagonal fraction the fit must reach, NOT an absolute floor --
+    # see the permutation check in fit_dawid_skene for why an absolute floor cannot work here.
+    permutation_min_diagonal_ratio: float = 0.7
     permutation_min_majority_agreement: float = 0.5
 
     @classmethod
@@ -64,9 +66,7 @@ class DawidSkeneSettings:
             posterior_threshold=config.dawid_skene_posterior_threshold,
             damping=config.dawid_skene_damping,
             epsilon=config.dawid_skene_epsilon,
-            permutation_min_diagonal_fraction=(
-                config.dawid_skene_permutation_min_diagonal_fraction
-            ),
+            permutation_min_diagonal_ratio=config.dawid_skene_permutation_min_diagonal_ratio,
             permutation_min_majority_agreement=(
                 config.dawid_skene_permutation_min_majority_agreement
             ),
@@ -92,6 +92,7 @@ class DawidSkeneFit:
     eligible_clients: int
     excluded_clients: tuple[str, ...]
     diagonal_fraction: float
+    reference_diagonal_fraction: float
     majority_agreement: float
     max_posterior_mean: float
     confusion: np.ndarray | None = field(default=None, repr=False)
@@ -114,11 +115,34 @@ def _failed(reason: str, num_open: int, **overrides) -> DawidSkeneFit:
         eligible_clients=0,
         excluded_clients=(),
         diagonal_fraction=0.0,
+        reference_diagonal_fraction=0.0,
         majority_agreement=0.0,
         max_posterior_mean=0.0,
     )
     base.update(overrides)
     return DawidSkeneFit(**base)
+
+
+def _diagonal_fraction(posterior, slices, onehots, num_classes: int, pseudocount: float) -> float:
+    """Fraction of supported ``(client, class)`` pairs whose modal emission is the class itself.
+
+    Both the fitted posterior and the majority reference go through this one function: the
+    permutation check compares the two numbers, so computing them any differently would make the
+    comparison meaningless.
+    """
+    hits = 0
+    total = 0
+    for j, (index, _) in enumerate(slices):
+        # "Supported" = the reference actually places mass on class c for items this client saw;
+        # unsupported rows are pure pseudocount and would report whatever the prior says.
+        supported = posterior[index].sum(axis=0) > 1.0
+        if not supported.any():
+            continue
+        counts = posterior[index].T @ onehots[j] + pseudocount
+        modal = counts.argmax(axis=1)
+        hits += int((modal[supported] == np.nonzero(supported)[0]).sum())
+        total += int(supported.sum())
+    return float(hits / total) if total else 0.0
 
 
 def build_annotation_matrix(
@@ -290,13 +314,27 @@ def fit_dawid_skene(
     labels = np.where(valid_mask, candidate, ABSTAIN).astype(np.int64)
 
     # --- Permutation check (F3): is latent class c still output class c? ----------------------
-    # "Supported" = the client actually has posterior mass on class c; unsupported rows are pure
-    # pseudocount and would otherwise dilute the fraction toward whatever the prior says.
-    support = np.stack([posterior[index].sum(axis=0) for index, _ in slices])
-    supported = support > 1.0
-    diagonal_hits = confusion.argmax(axis=2) == np.arange(num_classes)[None, :]
-    diagonal_fraction = (
-        float(diagonal_hits[supported].mean()) if supported.any() else 0.0
+    # Three gates, and it matters which one does what:
+    #   majority_agreement -- the actual permutation detector. It is the only statistic anchored
+    #     to something outside the fit, so it is the only one a global relabelling cannot fool.
+    #   diagonal_fraction  -- coherence of latent classes against the emitted label space, scored
+    #     RELATIVE to what majority achieves on the same annotations. It cannot see a global
+    #     relabelling at all (EM moves to the rotated solution, which is equally self-consistent,
+    #     so the number is unchanged -- see test_diagonal_fraction_alone_cannot_see_a_global
+    #     _relabelling). An absolute floor here is worse than useless: it conflates specialisation
+    #     with tampering, and on scenario 1 even sealed ground truth only scores ~0.14-0.25.
+    #   chance floor       -- backstop for a fit with no coherent class-to-label mapping at all,
+    #     checked first because the ratio degrades in step with the fit when both collapse.
+    diagonal_fraction = _diagonal_fraction(
+        posterior, slices, onehots, num_classes, settings.confusion_pseudocount
+    )
+    observed_majority = majority_labels != ABSTAIN
+    majority_posterior = np.zeros((num_open, num_classes), dtype=np.float64)
+    majority_posterior[
+        np.nonzero(observed_majority)[0], majority_labels[observed_majority]
+    ] = 1.0
+    reference_diagonal_fraction = _diagonal_fraction(
+        majority_posterior, slices, onehots, num_classes, settings.confusion_pseudocount
     )
     comparable = valid_mask & (majority_labels != ABSTAIN)
     majority_agreement = (
@@ -313,10 +351,18 @@ def fit_dawid_skene(
         eligible_clients=num_eligible,
         excluded_clients=excluded,
         diagonal_fraction=diagonal_fraction,
+        reference_diagonal_fraction=reference_diagonal_fraction,
         majority_agreement=majority_agreement,
         max_posterior_mean=float(max_posterior[valid_mask].mean()) if valid_mask.any() else 0.0,
     )
-    if diagonal_fraction < settings.permutation_min_diagonal_fraction:
+    # Chance backstop, checked first: a permuted fit lands near 1/num_classes, and if the majority
+    # reference is itself degenerate the ratio test below would otherwise admit anything.
+    if diagonal_fraction <= 1.0 / num_classes:
+        return _failed("permutation_check_chance", num_open, **diagnostics)
+    if (
+        diagonal_fraction
+        < settings.permutation_min_diagonal_ratio * reference_diagonal_fraction
+    ):
         return _failed("permutation_check_diagonal", num_open, **diagnostics)
     if majority_agreement < settings.permutation_min_majority_agreement:
         return _failed("permutation_check_agreement", num_open, **diagnostics)

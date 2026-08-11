@@ -80,6 +80,12 @@ def evaluate_round(path: str, sealed: np.ndarray, settings: DawidSkeneSettings) 
         "iterations": fit.iterations,
         "seconds": seconds,
         "diag_fraction": fit.diagonal_fraction,
+        "diag_reference": fit.reference_diagonal_fraction,
+        "diag_ratio": (
+            fit.diagonal_fraction / fit.reference_diagonal_fraction
+            if fit.reference_diagonal_fraction
+            else float("nan")
+        ),
         "majority_agreement": fit.majority_agreement,
         "ds_valid_rate": float(mask.mean()),
         "annotations_per_client": float((annotations != ABSTAIN).sum(axis=1).mean()),

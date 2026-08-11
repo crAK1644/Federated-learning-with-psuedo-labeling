@@ -201,3 +201,70 @@ def test_failed_fit_never_returns_usable_labels():
     assert not fit.ok
     assert fit.valid_mask.sum() == 0
     assert set(np.unique(fit.labels)) == {ABSTAIN}
+
+
+
+def _specialists(num_items: int = 900, num_clients: int = 9, seed: int = 7):
+    """A non-IID federation shaped like scenario 1: each client is reliable on the classes in its
+    own shard and, when it meets anything else, guesses *inside its own shard* rather than at
+    random. That last detail is the whole point -- it is what drives the confusion mode off the
+    diagonal for honest reasons, and it is what an absolute diagonal floor misreads as tampering.
+    """
+    rng = np.random.default_rng(seed)
+    truth = rng.integers(0, NUM_CLASSES, size=num_items)
+    annotations = np.empty((num_clients, num_items), dtype=np.int8)
+    for j in range(num_clients):
+        expertise = np.array([(2 * j) % NUM_CLASSES, (2 * j + 1) % NUM_CLASSES])
+        known = np.isin(truth, expertise)
+        in_shard_guess = expertise[rng.integers(0, len(expertise), size=num_items)]
+        annotations[j] = np.where(known & (rng.random(num_items) < 0.95), truth, in_shard_guess)
+    return annotations, truth
+
+
+def test_specialised_clients_are_not_mistaken_for_a_permutation():
+    """The regression the check was rewritten for. Acceptance must be decided against what
+    majority scores on the same annotations, never a fixed constant: on real scenario-1 data even
+    sealed ground truth scores ~0.14-0.25, so any absolute floor above that rejects correct labels.
+    """
+    annotations, _ = _specialists()
+    fit = _fit(annotations)
+    assert fit.status == "ok"
+    assert fit.diagonal_fraction >= 0.7 * fit.reference_diagonal_fraction
+    # Same fit, same data -- only the yardstick moves. If the gate were absolute this could not
+    # flip, and that flip is exactly the property under test.
+    stricter = _fit(annotations, permutation_min_diagonal_ratio=1.5)
+    assert stricter.status == "permutation_check_diagonal"
+    assert not stricter.valid_mask.any()
+
+
+def test_chance_backstop_rejects_an_internally_incoherent_fit():
+    """Every client applies its own rotation, so no labelling makes latent class c emit c. The
+    ratio test alone cannot catch this (the reference degrades in step with the fit), which is
+    why the absolute chance floor is checked first."""
+    rng = np.random.default_rng(11)
+    truth = rng.integers(0, NUM_CLASSES, size=900)
+    annotations = np.stack(
+        [((truth + j) % NUM_CLASSES).astype(np.int8) for j in range(11)]
+    )
+    fit = _fit(annotations, max_iterations=300)
+    assert fit.diagonal_fraction <= 1.0 / NUM_CLASSES
+    assert fit.status == "permutation_check_chance"
+    assert not fit.valid_mask.any()
+
+
+def test_diagonal_fraction_alone_cannot_see_a_global_relabelling():
+    """Documents why majority_agreement carries the permutation check and the diagonal statistic
+    does not: rotating every client's labels moves EM to the rotated solution, which is just as
+    internally self-consistent, so the fit's own diagonal fraction is unchanged."""
+    annotations, _ = _specialists()
+    rotated = ((annotations + 1) % NUM_CLASSES).astype(np.int8)
+    honest = _fit(annotations)
+    tampered = fit_dawid_skene(
+        rotated,
+        num_classes=NUM_CLASSES,
+        majority_labels=_majority(annotations),
+        settings=DawidSkeneSettings(min_clients=2),
+    )
+    assert tampered.diagonal_fraction == honest.diagonal_fraction
+    assert tampered.majority_agreement < 0.1 < honest.majority_agreement
+    assert tampered.status == "permutation_check_agreement"

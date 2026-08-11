@@ -49,6 +49,7 @@ DS_STATUS_CODES = {
     "permutation_check_diagonal": 12,
     "permutation_check_agreement": 13,
     "estimator_error": 14,
+    "permutation_check_chance": 15,
 }
 
 
@@ -304,6 +305,9 @@ class SSFLStrategy(Strategy):
             "ds_eligible_clients": fit.eligible_clients,
             "ds_excluded_clients": len(fit.excluded_clients),
             "ds_diagonal_fraction": fit.diagonal_fraction,
+            # The permutation check is a ratio of these two, so the yardstick has to be reported
+            # alongside the measurement or the accept/reject decision is not auditable.
+            "ds_reference_diagonal_fraction": fit.reference_diagonal_fraction,
             "ds_majority_agreement": fit.majority_agreement,
             "ds_max_posterior_mean": fit.max_posterior_mean,
             "ds_disagreement_rate": disagreement,
