@@ -1,0 +1,99 @@
+# Dawid-Skene shadow arm at full paper length: fit the estimator on live proposals, broadcast
+# majority anyway. 200 rounds, ~8 h on one RTX 3090 at the measured 144 s/round.
+#
+# configs/dawid_skene_shadow.yaml at 200 rounds, plus a wider annotation-dump schedule. Only
+# run_kind still differs from configs/paper.yaml (extension, forced by ExperimentConfig for
+# non-majority aggregation) -- num_server_rounds and checkpoint_rounds are now the paper values,
+# so the three deviations the 50-round trial carried are down to one.
+#
+# WHY THIS ARM IS ALSO THE CONTROL. Shadow broadcasts majority bit-identically and consumes no RNG
+# (asserted in tests/unit/test_strategy_dawid_skene.py, and verified on real data at rounds
+# 1/10/25/50 of the 50-round trial). Its accuracy trajectory therefore *is* a 200-round majority
+# baseline, while the same run records what Dawid-Skene would have broadcast in every round. That
+# matters here because no post-#34 200-round baseline exists: gpu50_baseline is 50 rounds AND
+# predates the determinism fix, so it cannot serve as the control for anything run now.
+#
+# WHAT IS ACTUALLY OPEN AT 200 ROUNDS. #36 traced the collapse to non-identifiable class pairs:
+# Dawid-Skene separates two classes only if some client votes on both, and at round 50 benign vs
+# gafgyt.scan had *zero* clients in common. That measurement is from a model still 150 rounds from
+# convergence. If clients broaden their emitted-label coverage as the global model converges, the
+# blind pairs close, the identifiability precondition starts to hold, and the arm could recover --
+# which is the one way the 200-round picture differs from the 50-round one for a stated reason
+# rather than by chance. The annotation snapshots below are what measures it
+# (scripts/identifiability.py re-run per round).
+profile: dawid_skene_shadow_200
+run_kind: extension
+algorithm: ssfl
+backbone: cnn
+scenario: 1
+seed: 2023
+
+data_path: artifacts/data
+output_path: artifacts/runs
+
+num_server_rounds: 200
+local_epochs: 5
+batch_size: 80
+paper_text_batch: false
+learning_rate: 1.0e-4
+# cuda, not auto: auto silently falls back to CPU, which on this workload looks like a slow run
+# rather than a misconfigured one. A missing GPU must fail the run, not quietly change the arm.
+device: cuda
+deterministic: true
+
+ssfl_threshold_policy: median
+ssfl_discriminator_mode: enabled
+ssfl_voting_mode: enabled
+ssfl_label_representation: hard
+ssfl_soft_label_round_decimals: null
+
+# --- Dawid-Skene -------------------------------------------------------------------------------
+# Unchanged from the 50-round trial. Deliberately not retuned: #32 swept pseudocounts
+# (0.01/0.1/1.0), a flat class prior, a 500-iteration cap and a 1e-8 tolerance, and every variant
+# scored the same. #36 explains why nothing in that grid could have mattered -- the fit already
+# beats the ground truth on its own objective by +3155 log-units, so the estimator is not
+# underfitting and there is nothing for a hyperparameter to improve.
+ssfl_hard_aggregation: dawid_skene_shadow
+dawid_skene_warmup_rounds: 0
+dawid_skene_max_iterations: 100
+dawid_skene_min_iterations: 2
+dawid_skene_tolerance: 1.0e-6
+dawid_skene_initialization_pseudocount: 0.01
+dawid_skene_confusion_pseudocount: 0.1
+dawid_skene_class_prior_pseudocount: 1.0
+dawid_skene_min_item_annotations: 1
+dawid_skene_min_client_annotations: 1
+dawid_skene_min_clients: 3
+dawid_skene_posterior_threshold: 0.0
+dawid_skene_damping: 1.0
+dawid_skene_epsilon: 1.0e-12
+dawid_skene_warm_start: false
+dawid_skene_permutation_min_diagonal_ratio: 0.7
+dawid_skene_permutation_min_majority_agreement: 0.5
+# Restricted diagnostic: the client-by-sample label matrix, pseudonymized by sender index, off by
+# default and deleted once the question is settled (DATA_CARD.md / the approval brief's safeguards).
+#
+# On for this run, and its main product. Six snapshots spanning the full length, chosen to measure
+# whether per-client class coverage broadens with training -- the one mechanism that could change
+# the verdict. 1 and 50 are matched to the 50-round trial's schedule so the two runs can be
+# compared directly at the same rounds.
+dawid_skene_save_annotations: true
+dawid_skene_annotation_rounds: [1, 25, 50, 100, 150, 200]
+
+dsfl_temperature: 0.1
+
+# Interval 1 because resume is not wired into server_app yet (REPRODUCIBILITY.md #27): an
+# interrupted run restarts from round 1, so the checkpoints are the only record of a partial run.
+# That matters more at 200 rounds than at 50 -- this is an 8-hour job.
+checkpoint_interval: 1
+checkpoint_rounds: [10, 50, 100, 150, 200]
+logging_interval: 1
+log_every_batch: false
+
+client_num_cpus: 1.0
+# 8 concurrent clients x 0.125 = one full GPU. At 0.0 Ray hides the GPU from the actors entirely
+# and every client trains on CPU regardless of `device`. Measured GPU utilization at this setting
+# is 94.8% mean / 98% median, so the card is saturated: two arms in parallel gain nothing, and
+# raising concurrency only lengthens the queue.
+client_num_gpus: 0.125
+max_concurrent_clients: 8

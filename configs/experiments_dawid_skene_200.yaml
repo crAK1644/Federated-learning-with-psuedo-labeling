@@ -1,0 +1,26 @@
+# 200-round Dawid-Skene confirmatory trial, scenario 1, seed 2023. Shadow (control) then active
+# (treatment), same order as the 50-round trial.
+#
+# Driven through run_suite.py rather than a hand-written `flwr run`, because the Ray backend
+# resources live in the *federation* config, not in ExperimentConfig -- `client_num_gpus: 0.125`
+# in the profile YAML is only a record of intent until `_federation_config` turns it into
+# `client-resources-num-gpus`. A bare `flwr run` gets Flower's defaults instead: 2 SuperNodes and
+# num_gpus=0, which hides the GPU from every ClientApp actor and fails all 27 clients with
+# "device=cuda requested but torch.cuda.is_available() is False".
+#
+# BUDGET. Measured 144 s/round across all four completed 50-round GPU runs, so each entry is ~8 h
+# and this matrix is ~16 h end to end. The GPU is saturated at these settings (94.8% mean
+# utilization), so the two entries cannot be overlapped to fit one night -- running both at
+# 0.0625 GPU each just halves each arm's throughput. If only one arm can run, see the note below.
+#
+# WHICH ARM FIRST, IF ONLY ONE FITS. Shadow. It is the only entry that yields an interpretable
+# result standing alone: because it broadcasts majority bit-identically, its own trajectory is the
+# 200-round majority baseline, and its per-round Dawid-Skene fits give the DS comparison offline
+# via scripts/ds_stage0.py. That offline screen predicted the 50-round live active result to within
+# 0.008 (0.5305 offline vs 0.5380 live). Active alone yields a number with nothing valid to compare
+# it to -- gpu50_baseline is 50 rounds and predates the #34 determinism fix.
+entries:
+  - name: ds200_shadow
+    base_profile: dawid_skene_shadow_200
+  - name: ds200_active
+    base_profile: dawid_skene_active_200
