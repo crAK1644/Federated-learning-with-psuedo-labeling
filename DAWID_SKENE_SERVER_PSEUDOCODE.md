@@ -1,7 +1,8 @@
-# SSFL-DS server pseudocode
+# Server-side Dawid-Skene aggregation pseudocode
 
 This is intentionally non-executable design pseudocode. It describes the recommended server-only
-SSFL-DS consensus adaptation and its experiment hooks. It is not a claim of paper-faithful FedDS.
+Dawid-Skene label aggregation and its experiment hooks inside the existing workflow. It does not
+define a combined method name, and it is not a claim of paper-faithful FedDS.
 
 ## 1. Types and configuration
 

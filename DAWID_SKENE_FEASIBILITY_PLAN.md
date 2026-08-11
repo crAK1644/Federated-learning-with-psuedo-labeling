@@ -4,17 +4,20 @@ Status: design and pseudocode only
 
 Branch: `dawid-skene`
 
-Proposed variant name: **SSFL-DS consensus**
+Component name: **Dawid-Skene server aggregation**
 
-Decision state: feasible for a controlled extension; not approved as a new default
+Decision state: feasible for a controlled server-side experiment; not approved as a new default
 
 ## 1. Executive verdict
 
-Implementing Dawid-Skene (DS) at the SSFL server is technically feasible with a narrow change at
-the current hard-label aggregation seam. The clients already upload the observations DS needs: one
-class label per shared open sample, with `-1` used for abstention. The server can infer latent label
-posteriors and client confusion matrices, then broadcast the same `global_labels` and `valid_mask`
-arrays that the rest of the system already consumes.
+Implementing Dawid-Skene (DS) only inside the server is technically feasible with a narrow change
+at the current hard-label aggregation seam. The existing client workflow remains unchanged. Clients
+already upload the observations DS needs: one class label per shared open sample, with `-1` used for
+abstention. The server can infer latent label posteriors and client confusion matrices, then
+broadcast the same `global_labels` and `valid_mask` arrays that the rest of the system consumes.
+
+No combined algorithm name is introduced. The experiment remains the existing federated
+pseudo-labeling workflow, with Dawid-Skene selected only at its server aggregation seam.
 
 The first experiment should be **server-only and opt-in**:
 
@@ -59,7 +62,7 @@ This repository's SSFL protocol intentionally does not upload client model param
 already predict the shared open set and upload filtered hard pseudo-labels. Therefore this plan is
 an explicit adaptation:
 
-| Concern | Paper FedDS | Proposed SSFL-DS consensus |
+| Concern | Paper FedDS | Proposed server-side Dawid-Skene aggregation |
 |---|---|---|
 | Client upload | Model parameters | Existing `pseudo_labels[int8, N]` |
 | Where public inference runs | Server | Existing client proposal phase |
@@ -68,9 +71,10 @@ an explicit adaptation:
 | Missing predictions | Not modeled | `ABSTAIN=-1` treated as missing |
 | Communication effect | Model-upload protocol | No change from current hard-label SSFL |
 
-This variant must be reported as **SSFL-DS consensus**, with `run_kind: extension`. It must not be
-called a reproduction of FedDS. A literal FedDS implementation would be a separate major protocol
-change involving model upload, server-side client-model inference, model aggregation, and a new
+Report the experiment as the existing method with `ssfl_hard_aggregation=dawid_skene` and
+`run_kind: extension`; do not create a separate combined method name. It must not be called a
+reproduction of FedDS. A literal FedDS implementation would be a separate major protocol change
+involving model upload, server-side client-model inference, model aggregation, and a new
 privacy/communication review.
 
 The paper specifies the E-step and M-step (Eqs. 9-11), but does not specify initialization,
@@ -96,45 +100,9 @@ Paper settings are reference anchors, not defaults for this N-BaIoT repository:
 The paper does not report seeds, repeated-run uncertainty, a default EM iteration count for its
 main tables, or measured DS timing/memory. This plan adds those missing controls.
 
-## 3. Proposed server flow
+## 3. Detailed architecture: Dawid-Skene inside the server only
 
-```mermaid
-flowchart LR
-    subgraph Clients["Clients - unchanged"]
-        A["1. Train persistent classifier<br/>on private labelled data"]
-        B["2. Predict the shared<br/>8,900-sample open set"]
-        C["3. Discriminator / threshold<br/>marks familiar samples"]
-        D["4. Upload aligned hard labels<br/>class 0..10; -1 = abstain"]
-        A --> B --> C --> D
-    end
-
-    subgraph Server["Central server - new consensus choice"]
-        E["5. Validate sender, manifest,<br/>shape, range, and duplicates"]
-        F[("Client x sample<br/>annotation matrix Y")]
-        G["6. Smoothed-vote initialization<br/>biases semantic class alignment"]
-        H["7. E-step in log space<br/>latent label posterior Q"]
-        I["8. M-step<br/>class prior + client confusion matrices"]
-        J{"Converged?"}
-        P{"Iteration cap<br/>reached?"}
-        K["9. Posterior argmax<br/>plus preregistered acceptance gate"]
-        L["10. Save DS diagnostics<br/>and majority comparison"]
-        M["11. Broadcast existing<br/>global_labels + valid_mask"]
-        N["12. Existing client/server<br/>distillation and evaluation"]
-        R["Deterministic majority vote<br/>fallback / shadow broadcast"]
-
-        E --> F --> G --> H --> I --> J
-        J -- "yes" --> K --> L --> M --> N
-        J -- "no" --> P
-        P -- "no" --> H
-        P -- "yes - policy fallback" --> R
-        E -- "insufficient valid input" --> R
-        H -- "non-finite / invariant failure" --> R
-        I -- "non-finite / invariant failure" --> R
-        R --> L
-    end
-
-    D --> E
-```
+![Detailed client and central-server architecture showing Dawid-Skene only inside the server aggregation block](DAWID_SKENE_SERVER_ARCHITECTURE.png)
 
 Only the server aggregation block changes. The client uplink and label/mask downlink retain the
 same tensor schema and logical array byte counts as the current hard-majority arm. Serialized message
@@ -761,11 +729,11 @@ Suggested thresholds should be confirmed before running the experiment.
 | Large iteration count | Server bottleneck over 200 rounds | Early stopping, profiling, max cap, no naive `J x N x C` tensor, offline screen first. |
 | Per-client reliability is sensitive | New persistent client-quality profile | Restricted attempt-local storage, opt-in annotation archive, retention limits, privacy review. |
 | Report key collision | DS extension silently replaces canonical SSFL | Include run kind and aggregation mode in report identity and tests. |
-| Name collision with existing DS-FL | Scientific confusion | Always use full `Dawid-Skene` / `SSFL-DS consensus`; never abbreviate it as existing `dsfl`. |
+| Name collision with existing DS-FL | Scientific confusion | Use `Dawid-Skene server aggregation`; never abbreviate it as existing `dsfl` or invent a combined method name. |
 
 ## 13. Decisions required before production implementation
 
-1. **Scope:** approve the recommended SSFL-DS label-consensus adaptation, or request literal
+1. **Scope:** approve the recommended server-side Dawid-Skene label aggregation, or request literal
    paper-style FedDS model weighting as a separate protocol.
 2. **Abstention:** keep discriminator abstentions as missing observations (recommended), or require
    every client to label every open sample, which changes the current protocol assumptions.
