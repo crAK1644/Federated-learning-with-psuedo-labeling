@@ -1,0 +1,17 @@
+# 50-round Dawid-Skene trial: shadow (control) then active (treatment), scenario 1, seed 2023.
+#
+# Driven through run_suite.py rather than a hand-written `flwr run`, because the Ray backend
+# resources live in the *federation* config, not in ExperimentConfig -- `client_num_gpus: 0.125`
+# in the profile YAML is only a record of intent until `_federation_config` turns it into
+# `client-resources-num-gpus`. A bare `flwr run` gets Flower's defaults instead: 2 SuperNodes and
+# num_gpus=0, which hides the GPU from every ClientApp actor and fails all 27 clients with
+# "device=cuda requested but torch.cuda.is_available() is False".
+#
+# Both entries are their base profile unchanged; the matrix exists to get the federation config
+# right and to run the two arms in sequence. Compare against the completed
+# ssfl-s1-gpu50_baseline run (majority aggregation, accuracy 0.7336, same paper settings).
+entries:
+  - name: ds50_shadow
+    base_profile: dawid_skene_shadow
+  - name: ds50_active
+    base_profile: dawid_skene_active

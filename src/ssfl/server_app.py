@@ -182,6 +182,16 @@ def main(grid: Grid, context: Context) -> None:
             if server_round == 0:
                 return None
             arrays_np = numpy_from_array_record(arrays)
+            if "valid_mask" not in arrays_np:
+                # aggregate_train returns (None, None) when no reply survived validation, and
+                # Flower then threads the empty initial ArrayRecord through to here. Say that,
+                # rather than raising KeyError three frames from the actual failure -- the real
+                # cause is always upstream (client crash, or a rejected envelope) and is in the
+                # ClientApp tracebacks above this line in the run log.
+                raise RuntimeError(
+                    f"round {server_round}: aggregation produced no labels, so every client "
+                    "reply was unusable -- see the ClientApp errors earlier in the run log"
+                )
             valid_mask = arrays_np["valid_mask"].astype(bool)
             aggregation = AggregationResult(
                 global_labels=arrays_np["global_labels"],
