@@ -29,6 +29,21 @@ def entry_names(matrix: Path) -> list[str]:
     return re.findall(r"^\s*-\s*name:\s*(\S+)", matrix.read_text(), flags=re.MULTILINE)
 
 
+def queued_rounds(matrix: Path) -> int:
+    """Rounds to assume for an entry whose run directory does not exist yet.
+
+    Read from the matrix's own base profiles rather than assumed, so the ETA is right from the
+    first refresh instead of only after the first run directory appears -- the gap between a
+    50-round and a 200-round matrix is six hours of pending work.
+    """
+    for profile in re.findall(r"^\s*base_profile:\s*(\S+)", matrix.read_text(), flags=re.MULTILINE):
+        config = REPO / "configs" / f"{profile}.yaml"
+        match = config.exists() and re.search(r"num_server_rounds:\s*(\d+)", config.read_text())
+        if match:
+            return int(match.group(1))
+    return 0
+
+
 def tail_lines(path: Path, limit: int = TAIL_BYTES) -> list[str]:
     with path.open("rb") as stream:
         stream.seek(0, 2)
@@ -85,12 +100,13 @@ def render(matrix: Path) -> str:
     lines = [f"{time.strftime('%H:%M:%S')}  {matrix.name}", ""]
     done_total = pending_total = 0
     rates: list[float] = []
+    queued = queued_rounds(matrix)
 
     for name in entry_names(matrix):
         matches = glob.glob(str(REPO / "artifacts" / "runs" / f"ssfl-s*-{name}-*"))
         if not matches:
             lines.append(f"  {name:<14} queued")
-            pending_total += 50  # unknown until the directory exists; assume the matrix default
+            pending_total += queued
             continue
         run_dir = Path(matches[0])
         total = total_rounds(run_dir)
