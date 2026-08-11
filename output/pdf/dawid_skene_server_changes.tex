@@ -9,6 +9,10 @@
 \usepackage{pdflscape}
 \usepackage[table]{xcolor}
 \usepackage{booktabs,tabularx,array}
+\usepackage{float}
+% ponytail: two lines instead of \usepackage{lastpage} -- this TeX Live is the basic
+% scheme and does not ship lastpage.sty. \label records \thepage, so \pageref works.
+\AtEndDocument{\label{LastPage}}
 \usepackage{enumitem,parskip,ragged2e}
 \usepackage{amsmath,amssymb}
 \usepackage{fancyhdr,titlesec}
@@ -29,7 +33,7 @@
   linkcolor=Navy,
   urlcolor=Teal,
   pdftitle={Dawid-Skene Server-Side Aggregation: Logic and Approval Brief},
-  pdfsubject={Five-page explanation for technical review and approval},
+  pdfsubject={Explanation for technical review and approval, revision 2},
   pdfkeywords={Dawid-Skene, federated learning, hard labels, server aggregation}
 }
 
@@ -54,7 +58,7 @@
 \fancyhf{}
 \fancyhead[L]{\small\color{DarkGray}Dawid-Skene server-side aggregation}
 \fancyhead[R]{\small\color{DarkGray}Logic and approval brief}
-\fancyfoot[C]{\small\color{DarkGray}\thepage\ of 5}
+\fancyfoot[C]{\small\color{DarkGray}\thepage\ of \pageref{LastPage}}
 \renewcommand{\headrulewidth}{0.4pt}
 
 \newcommand{\code}[1]{\texttt{#1}}
@@ -70,18 +74,24 @@
 % -----------------------------------------------------------------------------
 {\color{Navy}\rule{\textwidth}{1.4pt}}\\[3mm]
 {\LARGE\bfseries\color{Navy}Dawid-Skene Server-Side Aggregation\par}
-{\large\color{Blue}Five-page logic and approval brief\par}
+{\large\color{Blue}Logic and approval brief --- revision 2\par}
 {\small 11 August 2026 \hfill Branch: \code{dawid-skene}}
+\vspace{1mm}
+{\small\color{DarkGray}Revision 2 --- revised after code review against the branch; findings,
+evidence, and the reviewer's recorded decisions are in \code{DAWID\_SKENE\_REVIEW.md}.}
 \vspace{2mm}
 {\color{Navy}\rule{\textwidth}{1.0pt}}
 
+\enlargethispage{\baselineskip}  % ponytail: one line of slack keeps the scope list off a stub page
 \section{Purpose}
 
 This document explains one contained implementation decision: use the Dawid-Skene algorithm on the
 central server to combine the hard labels that clients already upload. It is written so reviewers can
 understand the logic, the exact system boundary, and the controlled test before approving the work.
-\textbf{Status:} the logic is under review; it is not yet an implemented or validated result, and no
-performance improvement is claimed here.
+\textbf{Status:} the logic is under review; it is not an implemented or validated result, and no
+performance improvement is claimed. Revision 2 adds the measured size of the problem
+(Section~\ref{sec:evidence}), taken from artifacts already on disk, plus the safeguards and staging
+the code review found missing.
 
 \decisionbox{\textbf{Approval target.} Approve a server-only implementation and a staged experiment.
 Majority voting remains available and remains the fallback. No client model, soft label, posterior,
@@ -93,7 +103,7 @@ Each client predicts a class for every sample in the same shared open dataset. A
 number from 0 to 10, or \code{-1} when it abstains. The server must turn these separate opinions into
 one hard global label per sample.
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \begin{tabularx}{\textwidth}{L{0.24\textwidth}YY}
 \toprule
@@ -118,8 +128,13 @@ structure. Dawid-Skene estimates it and uses it when choosing the label. It can 
 different class from majority when the disagreement pattern supports another class.
 
 This does \textbf{not} make consensus equal to ground truth. Similar client models can make the same
-mistake together. The result must be checked offline against sealed labels after a run; sealed labels
-must never enter live aggregation or training.
+mistake together, and on this dataset they measurably do: most current label errors are not close
+votes but landslides in which nearly every client agrees on the wrong class
+(Section~\ref{sec:evidence}). Overturning
+those requires the estimated confusion structure to be trusted precisely where the model's
+independence assumption is weakest. That is the main scientific risk of the experiment, and it is
+stated here rather than discovered later. The result must be checked offline against sealed labels
+after a run; sealed labels must never enter live aggregation or training.
 
 \subsection{Strict scope}
 
@@ -157,7 +172,73 @@ outside the Dawid-Skene loop.
 \clearpage
 
 % -----------------------------------------------------------------------------
-% PAGE 3
+% PAGE 3 (new in revision 2)
+% -----------------------------------------------------------------------------
+\section{Measured headroom: what this change is worth}\label{sec:evidence}
+
+Nothing below required new training or a code change. The 50 recorded per-round vote matrices of the
+existing scenario-1 run \code{ssfl-s1-gpu50\_baseline} were paired offline with the sealed open-set
+labels, reproduced by \code{scripts/ds\_headroom.py}.
+
+\begin{center}
+  \includegraphics[width=\linewidth]{DAWID_SKENE_HEADROOM.png}
+\end{center}
+
+\vspace{-1mm}
+\begingroup\small
+\begin{table}[H]
+\centering
+\begin{tabularx}{\textwidth}{L{0.10\textwidth}YYYYY}
+\toprule
+\textbf{Round} & \textbf{Majority label accuracy} & \textbf{Reachable ceiling} & \textbf{Tie rate} &
+\textbf{Errors that are near-ties} & \textbf{Annotators per item} \\
+\midrule
+1 & 0.186 & 0.664 & 0.121 & 0.607 & 11.8 \\
+2 & 0.519 & 0.859 & 0.088 & 0.529 & 10.0 \\
+5 & 0.716 & 0.991 & 0.053 & 0.457 & 9.2 \\
+10 & 0.711 & 0.997 & 0.032 & 0.287 & 9.1 \\
+30 & 0.720 & 0.998 & 0.023 & 0.228 & 8.9 \\
+50 & 0.739 & 0.997 & 0.024 & 0.141 & 8.5 \\
+\midrule
+mean & 0.703 & 0.987 & 0.031 & 0.280 & 9.0 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+\endgroup
+
+The \textbf{reachable ceiling} is the share of samples whose true class was proposed by at least one
+client. No vote-based aggregator, Dawid-Skene included, can exceed it.
+
+\begin{enumerate}
+  \item \textbf{Label quality is the binding constraint.} The server model finishes the run at 0.7335
+        accuracy while the labels it distils from are 0.739 correct. The model has already saturated
+        to its supervision, so aggregation is the right place to intervene.
+  \item \textbf{The headroom is 0.739 to 0.997.} For almost every sample somebody votes the true class
+        and is outvoted. This is the regime Dawid-Skene is designed for.
+  \item \textbf{The headroom sits where the method is weakest.} Only 14\% of final-round errors are
+        near-ties. Three classes are absorbed wholesale by a confident majority: class 4
+        (\code{gafgyt.tcp}) recall \textbf{0.000} into class 5, class 2 (\code{gafgyt.junk}) 0.120 into
+        class 1, and class 6 (\code{mirai.ack}) 0.335 into class 9. Every other class is above 0.89.
+        Success therefore depends on the estimated confusion matrices identifying a correct minority
+        against a correlated majority.
+\end{enumerate}
+
+\decisionbox{\textbf{What this changes for the reviewer.} The improvement to look for is not a small
+tie-breaking gain. It is whether the three collapsed classes are recovered. Worst-class recall and
+per-class recall of the \emph{aggregated labels} are therefore primary outcomes, not secondary ones:
+macro-F1 alone can move without any collapsed class recovering.}
+
+\textit{Caveat.} The recorded run's dataset manifest hash (\code{f529785f\ldots}) differs from the
+local one (\code{54023e3e\ldots}): same seed, split counts, and feature schema, but 96 differing file
+checksums, so the two hosts prepared data under different library versions. Row alignment is
+empirically certain --- chance accuracy under misalignment is 0.092 against 0.739 measured, with
+coherent per-class structure --- but confirmatory numbers must be regenerated on the experiment host
+against its own manifest. See the host and manifest control in Section~\ref{sec:test}.
+
+\clearpage
+
+% -----------------------------------------------------------------------------
+% PAGE 4
 % -----------------------------------------------------------------------------
 \section{Algorithm logic}
 
@@ -230,7 +311,7 @@ current hard-label branch calls majority aggregation. The new server selector ch
 shadow, or active Dawid-Skene and always returns the existing aggregation result shape. The existing
 soft-probability research path is separate and is not changed by this work.
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \begin{tabularx}{\textwidth}{L{0.25\textwidth}Y}
 \toprule
@@ -249,9 +330,33 @@ keep results separated by aggregation mode. Client confusion matrices remain res
 \end{tabularx}
 \end{table}
 
+\subsection{Non-negotiable safeguards}
+
+\begin{itemize}
+  \item No new Dawid-Skene field may cross the network. Shadow mode must broadcast the same logical
+        labels and mask as majority for the same valid unique-sender submissions.
+  \item Insufficient support, non-finite values, objective failure, or reaching the cap without
+        convergence must use majority from the same validated and de-duplicated proposal batch.
+  \item Raw client-by-sample matrices are off by default; any temporary audit is restricted,
+        pseudonymized, owner-controlled, and deleted after settings are locked.
+  \item \textbf{Shadow mode is a control only if it is bit-identical.} Dawid-Skene must consume no
+        random state, so a shadow run and a majority run at the same seed must produce identical
+        recorded metrics, not merely the same broadcast labels. This is asserted as a gate; without
+        it the shadow arm is not a control.
+  \item \textbf{Hidden-class permutation is detected, not assumed away.} After convergence, require
+        diagonal dominance across a preregistered share of supported client-class pairs and agreement
+        with majority above a preregistered floor. Violation returns majority and logs the reason.
+  \item \textbf{Sealed labels are read, never written.} The open split has no label file on disk; the
+        offline evaluator reconstructs the labels from the existing preparation audit table. Writing a
+        label file into the prepared dataset would change its manifest hash, and therefore every run
+        identity, breaking comparability with runs already recorded.
+\end{itemize}
+
+\clearpage
+
 \subsection{Settings to lock before active testing}
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \begin{tabularx}{\textwidth}{L{0.32\textwidth}L{0.18\textwidth}Y}
 \toprule
@@ -265,7 +370,16 @@ guarantee against label switching. \\
 Initialization/confusion/class-prior pseudocounts & 0.01 / 0.1 / 1.0 & Stabilize initial,
 client-confusion, and class-prior probabilities. \\
 Minimum clients & 3 & Practical support guard before fitting; not a proof of identifiability. \\
-Minimum item/client annotations & 1 / 1 & Keep primary coverage equal to the present hard-label path. \\
+Minimum item/client annotations & 1 / 1 & Keep primary coverage equal to the present hard-label path.
+\textbf{Accepted risk (reviewer decision):} a client's confusion matrix has 110 free parameters and
+roughly one third of samples carry any given client's vote, so sparse cells are noisy --- no client is
+dropped and no shrinkage is applied; per-client annotation counts are reported instead. \\
+Warm-up rounds & 0, or 3 if screened & Majority accuracy is 0.186 at round 1 and 0.519 at round 2, so
+an early fit estimates confusions from noise and can steer distillation when it matters most. This
+must be a stated setting, not an unexamined default. \\
+Permutation check & diagonal-dominance fraction and majority-agreement floor & The likelihood is
+invariant to permuting hidden classes, and the output integer is used directly as a training target.
+Failing the check is a fallback condition, not a warning. \\
 Posterior threshold/damping & 0.0 / 1.0 & Do not win by rejecting samples; use the full update. \\
 Precision/epsilon/warm start & float64 / $10^{-12}$ / false & Stable arithmetic; independent fit in
 every round. \\
@@ -276,16 +390,6 @@ Failure policy & majority & Includes invalid arithmetic and cap without converge
 
 \textit{These are initial engineering values for review, not defaults reported by Dong et al.}
 
-\subsection{Non-negotiable safeguards}
-
-\begin{itemize}
-  \item No new Dawid-Skene field may cross the network. Shadow mode must broadcast the same logical
-        labels and mask as majority for the same valid unique-sender submissions.
-  \item Insufficient support, non-finite values, objective failure, or reaching the cap without
-        convergence must use majority from the same validated and de-duplicated proposal batch.
-  \item Raw client-by-sample matrices are off by default; any temporary audit is restricted,
-        pseudonymized, owner-controlled, and deleted after settings are locked.
-\end{itemize}
 \endgroup
 
 \clearpage
@@ -293,24 +397,34 @@ Failure policy & majority & Includes invalid arithmetic and cap without converge
 % -----------------------------------------------------------------------------
 % PAGE 5
 % -----------------------------------------------------------------------------
-\section{Controlled check and approval decision}
+\section{Controlled check and approval decision}\label{sec:test}
 
 \subsection{Test sequence}
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \begin{tabularx}{\textwidth}{L{0.18\textwidth}L{0.22\textwidth}Y}
 \toprule
 \textbf{Stage} & \textbf{Execution} & \textbf{Purpose} \\
 \midrule
+\textbf{Stage 0: offline gate} \textit{(added in revision 2)} & Record the client-by-sample label
+matrix for a few rounds of one short run; fit Dawid-Skene offline against the sealed labels & Decide
+go or no-go, and screen pseudocounts, iteration cap, initialization, and warm-up, before any change
+reaches the strategy. That matrix is currently recorded nowhere --- only aggregated vote counts are
+--- so it is the one missing input. Cost is hours rather than GPU-days, and no locked live run is
+spent on hyperparameter search. \\
 Unit and benchmark gates & Local fixtures at 27- and 89-client sizes & Verify hand-computed E/M
-results, missing labels, sender-order invariance, numerical failure, fallback, memory, and latency. \\
-Shadow & All three scenarios; majority remains broadcast & Give majority and Dawid-Skene exactly the
-same live proposals. Check convergence, disagreement, latency, memory, and the unchanged payload
-before any Dawid-Skene label affects training. \\
-Matched active comparison & Majority versus Dawid-Skene in all three scenarios and multiple
-independent seeds & Lock settings first. Pair dataset manifest, split, scenario, seed, initial
-checkpoint, client participation policy, model, training settings, round count, code, and hardware.
+results, missing labels, sender-order invariance, numerical failure, fallback, permutation detection,
+memory, and latency. \\
+Shadow & Scenario 1; majority remains broadcast & Give majority and Dawid-Skene exactly the same live
+proposals. Check convergence, disagreement, latency, memory, the unchanged payload, and the
+bit-identity gate before any Dawid-Skene label affects training. \\
+Matched active comparison & Majority versus Dawid-Skene, scenario 1, five seeds --- ten runs
+\textit{(reviewer decision)} & Lock settings first. Pair dataset manifest, split, scenario, seed,
+initial checkpoint, client participation policy, model, training settings, round count, code, and
+hardware. Only \code{ExperimentConfig.seed} varies; the data-preparation seed stays fixed so both arms
+share one open set, and all runs use one host and one reported manifest hash. Scenarios 2 and 3 are
+conditional on an effect in scenario 1 and must not be reported as planned-and-dropped if never run.
 The only assigned intervention is hard-label aggregation; later model and proposal differences are
 downstream treatment effects. \\
 \bottomrule
@@ -323,10 +437,16 @@ downstream treatment effects. \\
   \item \textbf{Primary model outcomes:} mean server macro-F1 and accuracy over the final 10 rounds.
   \item \textbf{Offline label quality:} accuracy, macro-F1, per-class recall, corrected errors,
         introduced errors, matched coverage, posterior calibration, and class balance.
-  \item \textbf{Safety:} worst-class recall, new class collapse, fallback rate, convergence, invalid
-        values, and whether gains come mainly from rejecting samples.
+  \item \textbf{Recovery of the collapsed classes} \textit{(added in revision 2)}: per-class recall of
+        the aggregated labels for classes 2, 4, and 6, reported against the reachable ceiling rather
+        than against majority alone. The ceiling is the honest denominator for any claimed gain.
+  \item \textbf{Estimability} \textit{(added in revision 2)}: per-client annotation counts per
+        scenario, the accepted risk carried by the annotation floor of 1.
+  \item \textbf{Safety:} worst-class recall, new class collapse, fallback rate, permutation-check
+        failures, convergence, invalid values, and whether gains come mainly from rejecting samples.
   \item \textbf{Engineering:} server aggregation time, peak memory, audit size, resume behavior, and
         proof that tensor names, shapes, types, and logical network byte counts are unchanged.
+  \item \textbf{Provenance:} dataset manifest hash and host, reported next to every arm.
 \end{itemize}
 
 Results are paired within scenario and seed, and scenarios are reported separately. Items and rounds
@@ -336,17 +456,22 @@ are never tuned using sealed test labels.
 
 \subsection{Stop conditions}
 
-Stop and inspect before continuing if probabilities are invalid, hidden class meanings switch,
-a class collapses, convergence repeatedly fails, fallback becomes frequent, runtime or memory grows
-materially, any new client payload appears, or matched results are worse. All outcomes are reported;
-failed runs are not replaced with better seeds.
+Stop and inspect before continuing if probabilities are invalid, the permutation check fires
+repeatedly, a class collapses, convergence repeatedly fails, fallback becomes frequent, runtime or
+memory grows materially, any new client payload appears, or matched results are worse. All outcomes
+are reported; failed runs are not replaced with better seeds. A negative result --- Dawid-Skene
+matching majority and leaving classes 2, 4, and 6 collapsed --- is a reportable finding about
+correlated client error on this dataset, not a failed experiment.
 
 \decisionbox{\textbf{Reviewer approval requested: mark Yes, No, or Changes required.}
 \begin{enumerate}[leftmargin=1.4em,itemsep=0.04em,topsep=0.10em]
   \item Server hard-label aggregation seam only; no client or message-schema change. \hfill $\square$ Yes $\;\square$ No
-  \item EM logic and initial settings on pages 3--4, including \code{-1} as missing. \hfill $\square$ Yes $\;\square$ No
+  \item EM logic and initial settings on pages 4--5, including \code{-1} as missing. \hfill $\square$ Yes $\;\square$ No
   \item Cold start each round and majority fallback for unsupported or failed fits. \hfill $\square$ Yes $\;\square$ No
+  \item Stage 0 offline gate decides go or no-go before the strategy is changed. \hfill $\square$ Yes $\;\square$ No
+  \item Permutation detection, shadow bit-identity, and read-only sealed labels. \hfill $\square$ Yes $\;\square$ No
   \item Shadow execution before any Dawid-Skene label is broadcast. \hfill $\square$ Yes $\;\square$ No
+  \item Scenario 1, five seeds, one host and manifest; scenarios 2--3 conditional. \hfill $\square$ Yes $\;\square$ No
   \item Matched majority-versus-Dawid-Skene controls and reported metrics above. \hfill $\square$ Yes $\;\square$ No
 \end{enumerate}
 \textbf{Required changes:} \rule{0.72\textwidth}{0.4pt}\\[2mm]
@@ -362,5 +487,8 @@ federated learning,'' \emph{Information Sciences}, vol. 745, art. 123425, 2026,
 The paper's FedDS workflow uploads client model parameters and weights model aggregation. This brief
 does not copy that protocol. It uses Dawid-Skene only to combine the hard labels already available on
 the server, so the current client and network boundary remains intact.
+
+Every run described here is recorded as \code{run\_kind: extension}. The canonical reproduction
+results are not affected and are not re-reported under a new method name.
 
 \end{document}
