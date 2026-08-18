@@ -644,3 +644,40 @@ bütün validity kapıları geçerse inşa edilecek. Gerekçe: tie'lar ağırlı
 değiştirebileceği **tek** yer; DS orada majority'nin keyfi tie kuralını yenemiyorsa hiçbir `λ`
 onu kurtaramaz. Kayıtlı shadow run zaten tersini ölçüyor (aşama 7: 0.2217 vs 0.3783), yani şu
 anki kanıt hybrid'e karşı.
+
+## Aşama 8 sonucu (tamamlandı - koşumdan önce yazıldı)
+
+Kriterler `scripts/controlled_pair_criteria.py` içinde, **hiçbir kol çalıştırılmadan önce**
+commit edildi. Dosyanın git geçmişi işaret ettiği hiçbir run dizininden sonra olamaz; pre-registration'ın
+denetlenebilir olması bunu gerektiriyor.
+
+Üç grup, kontrol sırasıyla. **Validity** Dawid-Skene ile ilgili değil: deneyin gerçekten olup
+olmadığını sorar, ve düşen bir validity kapısı karşılaştırmayı **karara bağlamaz, geçersiz kılar**.
+**Primary** "DS burada yardım etti"nin önceden yazılmış tanımı. **Guardrail** bir kazancın maliyet
+sınırı.
+
+| Kriter | Eşik | Yön | Ne sorar |
+| --- | ---: | --- | --- |
+| `validity_min_valid_rate` | 0.95 | min | Her kol open set'in çoğunu etiketliyor mu |
+| `validity_max_shadow_broadcast_drift` | 0.0 | max | Shadow gerçekten hiçbir broadcast byte'ını değiştirmedi mi |
+| `validity_min_specialist_tie_rate` | 0.02 | min | Specialist dağılım gerçekten tie üretti mi |
+| `validity_min_active_ok_fraction` | 0.80 | min | Active kol kendi estimator'ını mı koşuyor, yoksa fallback'i mi ölçüyor |
+| `primary_min_ds_tie_advantage` | 0.05 | min | DS, ayrışabildikleri tek yerde majority'yi geçiyor mu |
+| `primary_min_weak_class_recall_gain` | 0.02 | min | `gafgyt.junk` recall'ı mühürlü test setinde kımıldadı mı |
+| `guardrail_max_accuracy_regression` | 0.005 | max | Kazanç global accuracy ile satın alınmadı |
+| `guardrail_max_valid_rate_regression` | 0.01 | max | Kazanç daha az etiketleyerek satın alınmadı |
+
+Her eşik #34'ün gürültü tabanının (bu ölçekte ~yarım puan) üstünde; gürültü bandının içinde kalan
+bir kriter kriter değildir. Ölçüm penceresi round 10'dan itibaren (erken round'lar modelin ayağa
+kalkması), recall karşılaştırması son 10 round.
+
+**NaN başarısızlıktır** - kanıtın yokluğu kanıt değil. Bir kolun ledger'ında sütun eksikse o
+kriter geçmez.
+
+Karar kuralı da eşiklerle birlikte yazıldı (`DECISION`): hybrid yalnızca tie avantajı **ve** bütün
+validity kapıları geçerse inşa edilir; beş ek seed yalnızca primary kriterler bu pilotta geçerse
+koşulur.
+
+On test evaluator'ın her kriteri gerçekten okuduğunu ve her birinin kendi başarısızlığını
+yakaladığını sabitliyor (`tests/unit/test_controlled_pair_criteria.py`) - her şeyi geçiren bir
+evaluator pre-registration'ı sessizce geçersiz kılardı.
