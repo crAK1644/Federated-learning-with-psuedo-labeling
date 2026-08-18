@@ -681,3 +681,125 @@ koşulur.
 On test evaluator'ın her kriteri gerçekten okuduğunu ve her birinin kendi başarısızlığını
 yakaladığını sabitliyor (`tests/unit/test_controlled_pair_criteria.py`) - her şeyi geçiren bir
 evaluator pre-registration'ı sessizce geçersiz kılardı.
+
+## Aşama 9 sonucu (toplantıya hazır)
+
+Yedi sorunun her biri için üç şey yazıldı: **şu an elde ne ölçüm var**, **kodun hâlihazırda
+verdiği çalışan cevap** (yani karar gelmezse ne olacağı) ve **cevap farklı çıkarsa ne değişir**.
+Amaç toplantıya açık uçlu soru listesiyle değil, reddedilebilir varsayılanlarla gitmek - yedi
+sorudan biri (4) zaten veriyle cevaplandı, ikisi (2, 5) mevcut kanıtla neredeyse kapalı.
+
+### 1. "Client weighting" pseudo-label weighting mi, model update weighting mi?
+
+**Ölçüm:** Bu soru bu repoda kısmen yapısal olarak cevaplı. SSFL, FD ve DS-FL **hiçbir zaman model
+parametresi taşımıyor** - wire'da yalnızca label/logit/probability var (`SECURITY.md`, privacy
+testleri). Bu üç protokolde "model update weighting" ifade edilebilir bir şey değil; ağırlık
+verilebilecek tek nesne pseudo-label oyları. Parametre taşıyan tek kol FL/FedAvg, ve orada
+ağırlıklandırma zaten standart `num_examples` ağırlığı.
+
+**Çalışan cevap:** Pseudo-label weighting. Aşama 6'nın `w_j(λ)` formülü oy skoruna giriyor,
+model güncellemesine değil.
+
+**Farklı çıkarsa:** Cevap "model update weighting" ise soru Dawid-Skene sorusu olmaktan çıkıp
+FedAvg ağırlıklandırma sorusuna dönüşür ve **SSFL kolunu hiç ilgilendirmez**; ayrı bir deney
+olarak, `algorithm="fl"` üzerinde kurgulanması gerekir.
+
+### 2. Round-level safety fallback korunacak mı?
+
+**Ölçüm:** REPRODUCIBILITY #37, 200-round active kolu: DS'in uygulandığı 39 round ortalama
+**0.5510**, majority'ye düşülen 161 round ortalama **0.8049**. DS'in ürettiği **en iyi** round,
+fallback round'larının **ortalamasının altında**. Fallback kaldırılsaydı bu kol 200 round boyunca
+0.55 civarında kalırdı.
+
+**Çalışan cevap:** Korunuyor. Aşama 6 kararı da bunu değiştirmiyor - shrink güvenli bir fit'in
+etkisini sınırlar, güvensiz bir fit'i güvenli yapmaz. Permutation ve agreement kapıları yerinde.
+
+**Farklı çıkarsa:** Fallback'in kaldırılması istenirse bu bir **ablation kolu** olarak
+çalıştırılabilir (ölçmek meşru), ama varsayılan davranış olarak değil - ölçülen maliyeti ~25 puan.
+
+### 3. Hybrid weighting ayrı bir deney kolu olarak mı ele alınacak?
+
+**Ölçüm:** Kayıtlı shadow run'da DS, tie item'larda majority'nin **arkasında** (0.2217 vs 0.3783,
+round 50). Ağırlıkların argmax'ı değiştirebileceği tek yer tie'lar.
+
+**Çalışan cevap:** Evet, ayrı kol - ama **koşullu**. Aşama 8'in `primary_min_ds_tie_advantage`
+kriteri ve bütün validity kapıları geçmeden inşa edilmiyor. Matris şu an 6 kol; hybrid 7. ve 8.
+kol olarak eklenir (specialist + balanced).
+
+**Farklı çıkarsa:** "Koşulsuz inşa et" denirse `λ` bir ablation ekseni olur (`λ ∈ {0, 0.25, 0.5,
+1.0}`) ve matris 6'dan 14 kola çıkar - yaklaşık 28 GPU saati. Bu, kapının açıkça devre dışı
+bırakılması demektir ve öyle kaydedilmeli.
+
+### 4. Pozitif kontrol için hangi sınıf çifti kullanılacak?
+
+**Ölçüm:** Aşama 4'te veriyle cevaplandı. `gafgyt.combo` (1) / `gafgyt.junk` (2): head-to-head
+sealed test'te linear **0.686**, forest **0.998**, 1-NN **0.998** - yani doğrusal model için zor,
+doğrusal olmayan için ayrılabilir; tam olarak aranan profil. 16 ve 9 client tarafından tutuluyor,
+open set'te 900'er örnek.
+
+**Çalışan cevap:** Bu çift. `gafgyt.tcp` / `gafgyt.udp` **negatif kontrol** ve ana deneyde
+kullanılmamalı - float32 collapse yüzünden öğrenilemez olması aggregation ile ilgisiz bir sebep,
+o çiftle koşulan bir deney aggregation hakkında hiçbir şey söylemez.
+
+**Farklı çıkarsa:** Başka bir çift istenirse `scripts/probe_class_pairs.py` aynı dört kriterle
+yeniden koşulur; kriterler zaten yazılı, seçim yeniden yapılabilir. Tek şart: seçim koşumdan önce
+sabitlensin.
+
+### 5. 50-round pilot kaç seed ile çalışacak?
+
+**Ölçüm:** REPRODUCIBILITY #34 gürültü tabanı bu ölçekte ~yarım puan. n=1 ile yarım puanın
+altındaki hiçbir fark kanıt değil.
+
+**Çalışan cevap:** Pilot **tek seed**, ve amacı etkiyi ölçmek değil - pipeline'ı, scenario 4
+partition'ını ve shadow kontratını doğrulamak. Aşama 8 kriterleri geçerse **5 seed**, yalnızca
+hâlâ GPU'ya değen kollar için.
+
+**Farklı çıkarsa:** Pilotun da çok seed'li olması istenirse ilk turun maliyeti 12 saatten ~60
+saate çıkar; bu, pipeline hatası ihtimalini tek seed'le elemeden ödenen bir bedel olur.
+
+### 6. Ana başarı metriği accuracy mi, hedef sınıf recall'u mü, macro F1 mı?
+
+**Ölçüm:** Global accuracy tek başına bu deneyde **kör**: aşama 4'te bir çiftin tek yönlü çökmesi
+global accuracy'yi 0.9'da bırakabiliyor. Kayıtlı run'da `gafgyt.junk` recall 50 round sonunda
+**0.1467**, `pair_confusion_ba` 800'den 764'e - global accuracy 0.7361 iken.
+
+**Çalışan cevap:** Aşama 8'de zaten pre-register edildi ve **üçünü de** kullanıyor, ama farklı
+rollerde: birincil metrik **zayıf sınıfın recall'u** (`primary_min_weak_class_recall_gain`, ≥0.02),
+global accuracy **guardrail** (`max_accuracy_regression`, ≤0.005), macro F1 raporlanıyor ama kapı
+değil. Deneyin var oluş sebebi çift olduğundan birincil metriğin çift üzerinde olması gerekiyor;
+accuracy'nin rolü "kazanç başka yerden çalınmadı" demek.
+
+**Farklı çıkarsa:** Birincil metrik accuracy olsun denirse `CRITERIA` içindeki iki satır yer
+değiştirir - ama o zaman tek yönlü çift çöküşü başarı sayılabilir hâle gelir; bu risk açıkça
+kabul edilmeli.
+
+### 7. `rater` ile karşılaştırmada hangi çıktılar ve toleranslar yeterli sayılacak?
+
+**Ölçüm:** İki ayrı seviye zaten mevcut ve karıştırılmamalı.
+
+- **Sayısal parite (crowd-kit):** Aynı MAP-EM ailesinden olduğu için nokta karşılaştırması
+  anlamlı. Yazılı toleranslar: label agreement ≥ **0.98**, accuracy farkı ≤ **0.02**, ortalama
+  posterior farkı ≤ **0.05**, maksimum posterior farkı ≤ **0.30**, ortalama confusion farkı ≤
+  **0.05**, ve her iki implementasyon da majority'yi geçmeli. `scripts/validate_dawid_skene_reference.py`
+  bunların herhangi biri aşılırsa non-zero çıkıyor. Transpoze bir confusion matrisi verildiğinde
+  şikâyet ettiği de testle sabit - başarısız olamayan bir doğrulayıcı hiçbir şey kanıtlamaz.
+- **Davranışsal reprodüksiyon (rater):** `rater` Bayesian Stan inference kullanıyor; MAP-EM ile
+  nokta pariteye **girmesi beklenmez** ve bir tolerans sayısı vermek yanıltıcı olur.
+  `scripts/reproduce_rater_evaluation.py` bunun yerine sunumun bildirdiği iki **etkiyi** yeniden
+  üretiyor: eşit bilgili beş rater'da majority tam modeli geçiyor, sistematik spammer'lar
+  varken rater'a özel confusion tahminleri kazanıyor.
+
+**Çalışan cevap:** Sayısal parite crowd-kit'e karşı toleranslarla, `rater`'a karşı yalnızca
+davranışsal reprodüksiyon. Toplantıda onaylanması istenen tam olarak bu ayrım.
+
+**Farklı çıkarsa:** `rater`'a karşı da sayısal parite isteniyorsa Stan/R zinciri bir bağımlılık
+olarak eklenmeli ve posterior ortalamalarının hangi tolerans içinde MAP tahminleriyle
+karşılaştırılacağı ayrıca tanımlanmalı - bu, karşılaştırmayı yöntem karşılaştırmasından
+inference-şeması karşılaştırmasına çevirir.
+
+### Sıralama
+
+Plan'ın kendi uygulama sırası korunuyor ve şu an nerede olunduğu: bağımsız doğrulama
+**(tamam, aşama 2)**, FL dışı kontrollü testler **(tamam, aşama 3)**, tek seed 50-round pilot
+**(konfigürasyon hazır, koşum GPU bekliyor)**, kontrol ve ardından çoklu seed ana deney
+**(aşama 8 kapılarına bağlı)**.
