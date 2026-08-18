@@ -18,6 +18,9 @@ Safety contract (DAWID_SKENE_REVIEW.md F3, and the approval brief's safeguards):
   directly as a distillation target, so a permutation check (diagonal dominance + agreement with
   majority) runs after convergence and is a fallback condition, not a warning.
 * Nothing here reads open-set ground truth. The estimator only ever sees client labels.
+
+``status``, the exclusion vocabulary and what "fallback" does and does not mean are defined
+once in DAWID_SKENE_GLOSSARY.md; the terms in this module follow it.
 """
 
 from __future__ import annotations

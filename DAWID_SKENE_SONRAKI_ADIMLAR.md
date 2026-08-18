@@ -277,3 +277,46 @@ notunun "arbitrary fiat, not a signal" iddiası, artık sayıyla.
 `tests/protocol/test_controlled_aggregation_experiments.py` beklentileri teste bağlıyor, ayrıca
 inşa edilen tie'ların gerçekten 2-2 olduğunu ve negatif kontrolün sessizce çözülebilir hâle
 gelmediğini kontrol ediyor.
+
+---
+
+## Aşama 1 sonucu (tamamlandı)
+
+Terminoloji tek yerde sabitlendi: `DAWID_SKENE_GLOSSARY.md`. Rapor, kod metrikleri ve sözlü
+anlatım artık aynı tanımlara bakıyor.
+
+Sözlükte dört bölüm var:
+
+1. **Birbirine karışan dört "dışarıda kalma".** Bir client bir round'dan dört ayrı noktada
+   düşebiliyor ve bunların karıştırılması bir run'ı yanlış okumanın en kolay yolu:
+   `rejected_count` (mesaj doğrulamadan geçmedi, annotation matrix'e hiç girmedi),
+   `ds_excluded_clients` (matrix'e girdi ama minimum annotation şartını karşılamadı, EM'den önce
+   atıldı), `ds_eligible_clients` (fit'e giren), `all_abstain_count` (hiçbir client'ın label
+   vermediği item).
+2. **Fit / uygulama / fallback.** `ds_status` ilk hata nedenidir ve kodlar birbirini dışlar.
+   `ds_applied` yalnızca fit bütün gate'leri geçtiğinde **ve** run active moddayken 1 olur -
+   shadow modda kusursuz bir fit bile 0 raporlar, çünkü hiçbir şey broadcast edilmedi.
+   `ds_applied` ile `ds_status == ok` aynı soru değil. Fallback round-level'dır: o round'un DS
+   sonucu bırakılır ve majority broadcast edilir; client bazında veya kısmi fallback yoktur.
+   Warm-up round'ları başarısızlık değildir, fallback oranına katılmamalıdır.
+3. **Benzer görünen büyüklükler.** `valid_rate` ile `ds_valid_rate`, `ds_diagonal_fraction` ile
+   `ds_reference_diagonal_fraction`, ve `ds_majority_agreement` ile `ds_disagreement_rate`.
+   Sonuncu ikisi aynı mask üzerinde hesaplanıyor, yani birbirinin tümleyeni - bağımsız iki kanıt
+   gibi raporlanmamalı.
+4. **Kullanılmayacak kelimeler.** DS posterior'ı için "confidence" (client tarafındaki
+   `confidence_*` metrikleri farklı bir büyüklük ve makalenin kendi terimi, onlar kalıyor), DS
+   çıktısı için "consensus", excluded/rejected'ın birbirinin yerine kullanılması, ve hangisi
+   olduğu söylenmeden "client feedback".
+
+`client weighting` sözlükte açıkça **önerilmiş ama uygulanmamış** olarak işaretlendi: bugünkü
+kodda hiçbir yol client ağırlıklandırmıyor, active path ya ağırlıksız majority ya da ağırlıksız
+Dawid-Skene argmax. Bu, 9. bölümdeki 1. soruyla doğrudan bağlantılı.
+
+Sözlüğün çürümemesi için `tests/unit/test_dawid_skene_glossary.py` yazıldı: kod bir metrik
+yayınlayıp sözlük tanımlamıyorsa, ya da sözlük artık yayınlanmayan bir metriği tanımlıyorsa test
+düşüyor. Status kod tablosu da `DS_STATUS_CODES` ile birebir karşılaştırılıyor. Test yazılır
+yazılmaz eksik bir tanım buldu (`ds_reference_diagonal_fraction`).
+
+Yan düzeltme: `MODEL_CARD.md` SSFL'i "broadcasts consensus hard labels" diye anlatıyordu; aggregator
+artık seçilebilir olduğu için "aggregated hard labels (majority vote, or Dawid-Skene when enabled)"
+oldu.

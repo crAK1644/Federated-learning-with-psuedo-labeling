@@ -278,6 +278,11 @@ class SSFLStrategy(Strategy):
     def _dawid_skene_metrics(
         self, fit: DawidSkeneFit | None, seconds: float, reason: str, majority
     ) -> dict[str, float | int]:
+        """Round diagnostics for metrics.parquet. Every key here is defined in
+        DAWID_SKENE_GLOSSARY.md, and tests/unit/test_dawid_skene_glossary.py fails if a key is
+        added, renamed or dropped without that file following. Note ``ds_applied`` answers what
+        clients received, not whether the fit succeeded -- a clean fit in shadow mode reports 0.
+        """
         if self.hard_aggregation == HardAggregation.majority:
             return {}
         if fit is None:

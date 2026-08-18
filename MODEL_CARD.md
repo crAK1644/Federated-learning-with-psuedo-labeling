@@ -28,8 +28,9 @@ kernels on CUDA and allocates eight concurrent actors at 0.125 GPU each on one R
 ## Protocols (what differs per algorithm — see `SECURITY.md` for the verified privacy boundary)
 
 - **SSFL** — classifier + discriminator per client; discriminator filters which open-set examples
-  are "familiar" enough to pseudo-label; server majority-votes filtered labels across clients, then
-  broadcasts consensus hard labels for a second distillation phase. This repo's primary target.
+  are "familiar" enough to pseudo-label; the server aggregates the filtered labels across clients
+  (majority vote, or Dawid-Skene when enabled) and broadcasts the aggregated hard labels for a
+  second distillation phase. Terms: `DAWID_SKENE_GLOSSARY.md`. This repo's primary target.
 - **FL** — standard FedAvg baseline (sample-weighted average of uploaded classifier params).
 - **FD** — clients upload per-class mean softmax vectors instead of params; server does leave-self-out
   class-wise averaging (Eq. 4); clients distill against the returned teacher targets.

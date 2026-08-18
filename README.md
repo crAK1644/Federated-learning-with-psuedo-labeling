@@ -270,6 +270,7 @@ Before treating a run as a reproduced result, review:
 | [Data card](DATA_CARD.md) | Where N-BaIoT comes from and how it is prepared. |
 | [Model card](MODEL_CARD.md) | What the models are intended for and where they fall short. |
 | [Security notes](SECURITY.md) | What crosses the wire and what remains private. |
+| [Dawid-Skene glossary](DAWID_SKENE_GLOSSARY.md) | What every label-aggregation metric means, and which four exclusions are not the same. |
 | [Deployment guide](deployment/README.md) | How to move from local simulation to real Flower processes. |
 
 ---
