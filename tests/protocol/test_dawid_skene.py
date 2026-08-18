@@ -94,6 +94,69 @@ def test_recovers_truth_better_than_majority_when_clients_differ_in_reliability(
     assert (fit.labels == truth).mean() > majority_accuracy
 
 
+def test_high_consensus_case_settles_in_five_steps_or_fewer():
+    annotations, truth = _synthetic(
+        num_items=1_000,
+        num_clients=7,
+        accuracy_by_client=[0.9] * 7,
+        seed=17,
+    )
+    fit = _fit(annotations)
+    assert fit.ok, fit.status
+    assert fit.iterations <= 5
+    assert (fit.labels == truth).mean() > 0.99
+
+
+def test_controlled_exact_ties_are_resolved_only_when_anchor_items_identify_raters():
+    """Two reliable and two inverted raters tie on every target item; a fifth rater labels only
+    anchor items. The anchors make the two groups identifiable, so DS can resolve the target ties.
+    Without anchors, the symmetric problem must be rejected rather than guessed through.
+    """
+    rng = np.random.default_rng(17)
+    num_anchors, num_tied = 400, 200
+    truth = rng.integers(0, 2, size=num_anchors + num_tied)
+    annotations = np.empty((5, len(truth)), dtype=np.int8)
+    annotations[0] = truth
+    annotations[1] = truth
+    annotations[2] = 1 - truth
+    annotations[3] = 1 - truth
+    annotations[4, :num_anchors] = truth[:num_anchors]
+    annotations[4, num_anchors:] = ABSTAIN
+
+    majority = _majority(annotations, num_classes=2)
+    fit = fit_dawid_skene(
+        annotations,
+        num_classes=2,
+        majority_labels=majority,
+        settings=DawidSkeneSettings(
+            min_clients=3,
+            max_iterations=500,
+            permutation_min_diagonal_ratio=0.0,
+            permutation_min_majority_agreement=0.0,
+        ),
+    )
+    assert fit.ok, fit.status
+    assert (majority[num_anchors:] == truth[num_anchors:]).mean() < 0.6
+    assert (fit.labels[num_anchors:] == truth[num_anchors:]).mean() == 1.0
+    assert fit.iterations <= 5
+
+    tied_only = annotations[:, num_anchors:]
+    tied_majority = majority[num_anchors:]
+    unanchored = fit_dawid_skene(
+        tied_only,
+        num_classes=2,
+        majority_labels=tied_majority,
+        settings=DawidSkeneSettings(
+            min_clients=3,
+            max_iterations=500,
+            permutation_min_diagonal_ratio=0.0,
+            permutation_min_majority_agreement=0.0,
+        ),
+    )
+    assert unanchored.status == "permutation_check_chance"
+    assert not unanchored.valid_mask.any()
+
+
 def test_confusion_matrix_tracks_the_client_that_generated_it():
     annotations, _ = _synthetic(accuracy_by_client=[0.95, 0.95, 0.95, 0.4], seed=3)
     fit = _fit(annotations)
@@ -121,6 +184,17 @@ def test_all_abstain_items_stay_invalid():
     assert not fit.valid_mask[:10].any()
     assert (fit.labels[:10] == ABSTAIN).all()
     assert fit.valid_mask[10:].all()
+
+
+def test_all_abstain_items_do_not_change_the_fit_for_observed_items():
+    annotations, _ = _synthetic(seed=32)
+    baseline = _fit(annotations)
+    padded = _fit(np.pad(annotations, ((0, 0), (0, 1_000)), constant_values=ABSTAIN))
+    assert baseline.ok and padded.ok
+    np.testing.assert_array_equal(padded.labels[: annotations.shape[1]], baseline.labels)
+    np.testing.assert_allclose(padded.confusion, baseline.confusion, rtol=0.0, atol=1e-12)
+    assert padded.iterations == baseline.iterations
+    assert padded.objective == pytest.approx(baseline.objective, abs=1e-10)
 
 
 def test_deterministic_and_invariant_to_client_order():

@@ -200,6 +200,7 @@ def fit_dawid_skene(
     item_counts = observed.sum(axis=0).astype(np.int64)
     if not item_counts.any():
         return _failed("no_observations", num_open, excluded_clients=excluded)
+    observed_items = item_counts > 0
 
     num_eligible = annotations.shape[0]
     eps = settings.epsilon
@@ -232,7 +233,11 @@ def fit_dawid_skene(
 
     for iterations in range(1, settings.max_iterations + 1):
         # --- M-step: posterior-weighted counts + Dirichlet pseudocounts ---------------------
-        prior_counts = posterior.sum(axis=0) + settings.class_prior_pseudocount
+        # An item with no annotations is absent from the Dawid-Skene likelihood. Its initialized
+        # posterior is therefore only a placeholder for the fixed-width output array and must not
+        # be counted when estimating the class prior. Including it would let appended all-abstain
+        # columns pull the fitted prior towards uniform and change otherwise identical results.
+        prior_counts = posterior[observed_items].sum(axis=0) + settings.class_prior_pseudocount
         new_prior = prior_counts / prior_counts.sum()
         new_confusion = np.empty_like(confusion)
         for j in range(num_eligible):
@@ -269,7 +274,7 @@ def fit_dawid_skene(
         # Unobserved items contribute log(1) to the likelihood, not log(prior): they carry no
         # evidence, so counting their prior mass would let the objective drift with coverage.
         per_item_loglik = (np.log(row_sum) + row_max).ravel()
-        log_likelihood = float(per_item_loglik[item_counts > 0].sum())
+        log_likelihood = float(per_item_loglik[observed_items].sum())
         # Regularized objective: the M-step is a Dirichlet MAP update, so the monotone quantity is
         # the observed-data log-likelihood plus the matching log-prior terms -- not a raw one.
         objective = float(
