@@ -15,3 +15,6 @@ deployment/generated/
 # recorded runs at the repo root pushes it past the 10 MB FAB limit.
 ssfl-s1-*/
 tmp/
+
+.firecrawl/
+output/latex/
