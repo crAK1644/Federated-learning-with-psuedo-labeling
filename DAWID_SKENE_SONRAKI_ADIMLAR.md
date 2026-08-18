@@ -320,3 +320,98 @@ yazılmaz eksik bir tanım buldu (`ds_reference_diagonal_fraction`).
 Yan düzeltme: `MODEL_CARD.md` SSFL'i "broadcasts consensus hard labels" diye anlatıyordu; aggregator
 artık seçilebilir olduğu için "aggregated hard labels (majority vote, or Dawid-Skene when enabled)"
 oldu.
+
+---
+
+## Aşama 4 sonucu (tamamlandı)
+
+`scripts/probe_class_pairs.py` gerçek N-BaIoT verisi üzerinde adayları ölçüyor. Bütün probe'lar
+private split'te fit ediliyor, sealed test split'te değerlendiriliyor. Kriterler sonuçlara
+bakılmadan önce `CRITERIA` olarak yazıldı.
+
+```bash
+uv run python scripts/probe_class_pairs.py
+```
+
+### Çok sınıflı probe'lar (sealed test)
+
+| Probe | Accuracy |
+| --- | ---: |
+| Linear (logistic regression) | 0.7704 |
+| Random forest | 0.8983 |
+| 1-nearest-neighbor | 0.8851 |
+
+### Adaylar
+
+| Çift | Confusion mass | Linear | Forest | 1-NN | Rol |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `gafgyt.tcp` / `gafgyt.udp` | 0.4992 | 0.4992 | 0.4992 | 0.4994 | negatif kontrol |
+| `gafgyt.combo` / `gafgyt.junk` | 0.0017 | 0.6861 | 0.9983 | 0.9981 | pozitif kontrol |
+
+Sıradaki en karışık çiftler (`benign`/`gafgyt.tcp`, `benign`/`gafgyt.scan`, ...) zaten 0.998
+üzerinde ayrılıyor, yani gerçek bir aday yok.
+
+**`gafgyt.combo` / `gafgyt.junk` dört ön-kayıtlı kriteri de geçiyor:** non-linear ayrılabilir
+(0.9983 >= 0.95), linear zorlanıyor (0.6861 <= 0.90), client coverage yeterli (16 ve 9 client,
+>= 3), open-set desteği yeterli (900 ve 900, >= 200). "Zor ama öğrenilebilir" tanımına tam
+oturuyor: aggregation'ın fark yaratabileceği boşluk burada.
+
+### `gafgyt.tcp` / `gafgyt.udp`: ayırt edilemez değil, yok edilmiş
+
+Bu çift negatif kontrol kriterini geçiyor (forest 0.4992 <= 0.80) ama nedeni önemli, çünkü
+"bu iki saldırı birbirine benziyor" ile "pipeline farkı çöpe attı" aynı şey değil:
+
+| Sınıf | Sealed test'te farklı satır | Ortalama feature std |
+| --- | ---: | ---: |
+| `gafgyt.tcp` | 1.800 örnekte **5** | 0.002888 |
+| `gafgyt.udp` | 1.800 örnekte **1** | 0.000001 |
+| diğer dokuz sınıf | 1.400-1.800 arası (neredeyse hepsi farklı) | 0.009 - 0.094 |
+
+Yani `gafgyt.udp`'nin bütün test örnekleri tek bir vektör, ve `gafgyt.udp` satırlarının tamamı
+bir `gafgyt.tcp` satırıyla byte-byte aynı. Hiçbir model, hiçbir aggregator bunu ayıramaz.
+
+Kaybın nerede olduğu izlendi:
+
+1. **Sampling değil.** Audit trail'de bu 1.800 test satırı 1.800 farklı kaynak satırından geliyor.
+2. **Ham veri değil.** Ham CSV'de (Ecobee, ilk 2.000 satır) `tcp` 1.847, `udp` 1.892 farklı satır
+   içeriyor.
+3. **float32 cast.** Aynı ham satırlar min-max scaler'dan geçirildiğinde float64'te 1.847 farklı
+   satır kalıyor, float32'ye çevrildiğinde **7**'ye düşüyor. `combo` aynı işlemde 2.000/2.000
+   kalıyor.
+
+Mekanizma: global min-max aralığı ~5.7e17 mertebesindeki outlier'lar tarafından belirleniyor;
+`tcp`/`udp`'nin sınıf içi değişimi bu aralığa bölündükten sonra float32 çözünürlüğünün altına
+düşüyor. float64 bunu koruyor, float32 yuvarlayıp atıyor.
+
+**Öneri:** çift negatif kontrol olarak kalsın, ama preprocessing ana deneyden önce
+değiştirilmesin - makalenin kendisi min-max kullanıyor ve scaler'ı değiştirmek bütün
+reprodüksiyonu kaydırır. Bu bulgu bir deviation notu olarak kaydedilmeli, sessizce düzeltilecek
+bir bug olarak değil.
+
+### Gerçek run'da ne oluyor
+
+Kayıtlı 50-round shadow run'ının aggregation audit'i, open-set ground truth'a karşı skorlandı
+(ground truth yalnızca offline, data-prep audit trail'inden okunuyor; server onu hiç görmüyor):
+
+| Round | Majority pseudo-label accuracy | Valid rate |
+| ---: | ---: | ---: |
+| 1 | 0.1969 | 0.9627 |
+| 10 | 0.6989 | 0.9998 |
+| 25 | 0.7078 | 0.9994 |
+| 50 | 0.7361 | 0.9993 |
+
+Çift bazında:
+
+- `tcp`/`udp`: round 1'de bütün `udp` örnekleri `tcp` etiketlendi (898/898); round 10'dan sonra
+  tam tersi, bütün `tcp` örnekleri `udp` etiketlendi (899/899) ve `udp` tamamen doğru göründü.
+  Yani hangi ismin kazandığına yazı-tura karar veriyor. Bu, yukarıdaki collapse'in FL tarafındaki
+  görüntüsü.
+- `combo`/`junk`: round 10'da `junk -> combo` 800, ters yön 35; round 50'de 764 ve 16. `combo`
+  büyük ölçüde doğru (883/899), `junk` büyük ölçüde yanlış (132/896). Yani **asimetrik, sınıfa
+  koşullu** bir hata - Dawid-Skene'in confusion matrix'inin doğrudan temsil ettiği hata biçimi,
+  ve Aşama 3'teki sistematik hata deneyinin gerçek veri karşılığı.
+
+### 9. bölümdeki 4. soruya cevap
+
+Pozitif kontrol `gafgyt.combo` / `gafgyt.junk`, negatif kontrol `gafgyt.tcp` / `gafgyt.udp`.
+Öğretmene sorulacak olan artık "hangi çift" değil, "bu kanıtla bu seçim uygun mu".
