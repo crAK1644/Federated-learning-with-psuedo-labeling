@@ -77,8 +77,10 @@ class DawidSkeneSettings:
 class DawidSkeneFit:
     """``status == "ok"`` is the only case in which ``labels``/``valid_mask`` may be broadcast.
 
-    ``confusion`` is a restricted diagnostic (per-client behaviour): the caller must not put it on
-    the wire and must not write it to the default audit output.
+    ``confusion``, ``prior`` and ``posterior`` are restricted diagnostics (per-client behaviour
+    and per-sample uncertainty): the caller must not put them on the wire and must not write them
+    to the default audit output. They exist for offline validation against a reference
+    implementation, which needs the fitted distributions and not just the argmax labels.
     """
 
     status: str  # "ok", or the fallback reason
@@ -96,6 +98,8 @@ class DawidSkeneFit:
     majority_agreement: float
     max_posterior_mean: float
     confusion: np.ndarray | None = field(default=None, repr=False)
+    prior: np.ndarray | None = field(default=None, repr=False)
+    posterior: np.ndarray | None = field(default=None, repr=False)
 
     @property
     def ok(self) -> bool:
@@ -373,5 +377,11 @@ def fit_dawid_skene(
         return _failed("permutation_check_agreement", num_open, **diagnostics)
 
     return DawidSkeneFit(
-        status="ok", labels=labels, valid_mask=valid_mask, confusion=confusion, **diagnostics
+        status="ok",
+        labels=labels,
+        valid_mask=valid_mask,
+        confusion=confusion,
+        prior=prior,
+        posterior=posterior,
+        **diagnostics,
     )

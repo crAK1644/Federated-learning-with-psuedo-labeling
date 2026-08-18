@@ -157,3 +157,46 @@ Sonuca baktıktan sonra eşik belirlemekten kaçınmak için aşağıdaki kriter
 7. `rater` ile karşılaştırmada hangi çıktılar ve toleranslar yeterli kabul edilecek?
 
 Bu kararlar alındıktan sonra uygulama sırası: bağımsız doğrulama, FL dışı kontrollü testler, tek seed 50-round pilot, kontrol ve ardından çoklu seed ana deney şeklinde olmalı.
+
+---
+
+## Aşama 2 sonucu (tamamlandı)
+
+`scripts/validate_dawid_skene_reference.py` aynı sabit annotation matrisini hem bu repodaki
+MAP-EM implementasyonuna hem de bağımsız bir referansa veriyor. Tek komut:
+
+```bash
+uv run --with crowd-kit python scripts/validate_dawid_skene_reference.py
+```
+
+**Referans seçimi:** Plan `rater`'ı adlandırıyor, fakat `rater` R + Stan (Bayesian). Deterministik
+bir MAP-EM'i Bayesian bir örnekleyiciyle karşılaştırmak ikinci bir fark kaynağı ekler, daha temiz
+bir karşılaştırma vermez. Bunun yerine aynı 1979 modelinin bağımsız Python implementasyonu olan
+`crowd-kit` kullanıldı. `crowd-kit` bilerek proje bağımlılığı **değil** (transformers/tokenizers
+zinciri çekiyor); `uv run --with` ile çalıştırılıyor, testi yoksa skip ediyor.
+
+Deney tasarımı: 4 sınıf, 400 item, 7 client (4 güvenilir, 1 gürültülü, 1 sistematik hatalı
+`2 -> 1`, 1 seyrek/abstain eden). Üç varyant: temel, eksik annotation, hiç annotate edilmemiş
+item eklenmiş.
+
+| Vaka | Bizim accuracy | crowd-kit | Majority | Label agreement | Ortalama posterior farkı |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| base | 0.9700 | 0.9700 | 0.9625 | 1.0000 | 7.3e-07 |
+| missing | 0.9575 | 0.9575 | 0.9325 | 1.0000 | 1.6e-06 |
+| all_abstain | 0.9700 | 0.9700 | 0.9625 | 1.0000 | 7.3e-07 |
+
+Ek doğrulamalar: sınıf permutation'ı her üç vakada identity, sistematik hatanın yönü iki
+implementasyonda da `2 -> 1`, confusion matrix ortalama farkı 1e-06 mertebesinde. Determinism,
+client sırasına karşı invariance ve "hiç annotate edilmemiş item'lar fit'i kaydırmıyor" kontrolleri
+geçti.
+
+Karşılaştırma arm'ı pseudocount'ları ~0'a çekiyor (crowd-kit regularize edilmemiş MLE fit ediyor)
+ve permutation gate'lerini kapatıyor: gate'ler deployment safeguard'ı, algoritma özelliği değil.
+
+**Bu iş sırasında bulunan bir hata:** hiç annotation almamış item'ın placeholder posterior'ı
+M-step'te class prior sayımına giriyordu; all-abstain kolon eklemek fit'i kaydırıyordu. Düzeltildi
+(`fix: exclude unobserved items from the Dawid-Skene class prior`).
+
+`tests/protocol/test_dawid_skene_reference_validation.py` bunu teste bağlıyor ve ayrıca negatif
+kontrol içeriyor: confusion matrix bilerek transpose edildiğinde karşılaştırmanın hata vermesi
+gerekiyor. Doğrulayıcının kendisi başarısız olamıyorsa hiçbir şey kanıtlamaz.
