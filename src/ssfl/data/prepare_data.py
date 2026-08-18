@@ -449,6 +449,8 @@ def main(argv: list[str] | None = None) -> int:
         test_ratio=args.test_ratio,
         normalization_mode=NormalizationMode(args.normalization_mode),
         dirichlet_alpha=args.dirichlet_alpha,
+        target_classes=tuple(args.target_classes),
+        target_specialization=args.target_specialization,
         validate_only=args.validate_only,
     )
     try:

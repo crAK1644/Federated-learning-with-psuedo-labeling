@@ -290,3 +290,40 @@ def test_run_full_rerun_swaps_atomically(synthetic_dataset, tmp_path) -> None:
     assert (output / "dataset_manifest.json").exists()
     assert not (output.parent / f"{output.name}.previous").exists()
     assert not (output.parent / f"{output.name}.building").exists()
+
+
+def test_every_cli_flag_reaches_the_config(monkeypatch):
+    """A flag that parses but is never passed on is worse than one that does not exist.
+
+    ``--target-classes`` was exactly that for one commit: argparse accepted it, ``run`` never saw
+    it, and the prepared root came out looking plausible with scenario 4 silently missing. Passing
+    a non-default value for every flag at once catches the whole class rather than that one
+    instance -- a flag dropped on the floor leaves its config field at the default it was given
+    here to differ from.
+    """
+    from ssfl.data import prepare_data
+
+    captured = {}
+    monkeypatch.setattr(prepare_data, "run", lambda config: captured.setdefault("c", config) and {})
+
+    argv_and_expected = {
+        "--seed": ("11", "seed", 11),
+        "--samples-per-subset": ("500", "samples_per_subset", 500),
+        "--private-ratio": ("0.6", "private_ratio", 0.6),
+        "--open-ratio": ("0.2", "open_ratio", 0.2),
+        "--test-ratio": ("0.2", "test_ratio", 0.2),
+        "--dirichlet-alpha": ("0.4", "dirichlet_alpha", 0.4),
+        "--target-specialization": ("0.75", "target_specialization", 0.75),
+    }
+    argv = ["--input", "in", "--output", "out", "--target-classes", "1", "2"]
+    for flag, (value, _, _) in argv_and_expected.items():
+        argv += [flag, value]
+
+    prepare_data.main(argv)
+    config = captured["c"]
+
+    for _, (_, field, expected) in argv_and_expected.items():
+        assert getattr(config, field) == expected, field
+    assert config.target_classes == (1, 2)
+    assert str(config.input_path) == "in"
+    assert str(config.output_path) == "out"
