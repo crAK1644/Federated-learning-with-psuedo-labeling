@@ -100,6 +100,8 @@ class DawidSkeneFit:
     reference_diagonal_fraction: float
     majority_agreement: float
     max_posterior_mean: float
+    # Row order of ``confusion``; restricted along with it, and empty unless the fit reached EM.
+    eligible_senders: tuple[str, ...] = ()
     confusion: np.ndarray | None = field(default=None, repr=False)
     prior: np.ndarray | None = field(default=None, repr=False)
     posterior: np.ndarray | None = field(default=None, repr=False)
@@ -199,6 +201,7 @@ def fit_dawid_skene(
     excluded = tuple(
         senders[j] for j in np.nonzero(~eligible)[0] if j < len(senders)
     )
+    eligible_senders = tuple(senders[j] for j in np.nonzero(eligible)[0] if j < len(senders))
     if int(eligible.sum()) < settings.min_clients:
         return _failed("insufficient_clients", num_open, excluded_clients=excluded)
 
@@ -362,6 +365,7 @@ def fit_dawid_skene(
         objective=objective,
         eligible_clients=num_eligible,
         excluded_clients=excluded,
+        eligible_senders=eligible_senders,
         diagonal_fraction=diagonal_fraction,
         reference_diagonal_fraction=reference_diagonal_fraction,
         majority_agreement=majority_agreement,

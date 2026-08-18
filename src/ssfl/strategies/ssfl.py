@@ -21,6 +21,7 @@ from flwr.serverapp.strategy.strategy_utils import aggregate_metricrecords, samp
 from ssfl.config import Algorithm, HardAggregation, VotingMode
 from ssfl.models import NUM_CLASSES
 from ssfl.protocols.dawid_skene import (
+    ABSTAIN,
     DawidSkeneFit,
     DawidSkeneSettings,
     build_annotation_matrix,
@@ -195,6 +196,11 @@ class SSFLStrategy(Strategy):
                 # Restricted diagnostic (DATA_CARD.md / the approval brief): raw client-by-sample
                 # labels are off by default and this audit is deleted once settings are locked.
                 payload["annotations"] = annotations
+                if ds_fit is not None and ds_fit.confusion is not None:
+                    # Per-client behaviour, restricted for the same reason and behind the same
+                    # gate. Row order is not recoverable from the matrix, so it ships with it.
+                    payload["dawid_skene_confusion"] = ds_fit.confusion
+                    payload["dawid_skene_confusion_clients"] = np.array(ds_fit.eligible_senders)
             np.savez_compressed(audit_tmp, **payload)
             audit_tmp.replace(audit_path)
         valid_votes = result.votes_per_class[result.valid_mask]
@@ -206,7 +212,9 @@ class SSFLStrategy(Strategy):
         label_counts = np.bincount(broadcast_labels[broadcast_mask], minlength=NUM_CLASSES)
         # Stashed so server_app can put the ds_* diagnostics in metrics.parquet next to accuracy:
         # aggregate_train's return value never reaches the evaluate callback.
-        ds_metrics = self._dawid_skene_metrics(ds_fit, ds_seconds, ds_reason, result)
+        ds_metrics = self._dawid_skene_metrics(
+            ds_fit, ds_seconds, ds_reason, result, annotations
+        )
         self.last_dawid_skene_metrics = ds_metrics
         arrays_out = array_record_from_numpy(
             {"global_labels": broadcast_labels.astype("int8"), "valid_mask": broadcast_mask}
@@ -276,7 +284,12 @@ class SSFLStrategy(Strategy):
         return annotations, fit, time.perf_counter() - started, fit.status
 
     def _dawid_skene_metrics(
-        self, fit: DawidSkeneFit | None, seconds: float, reason: str, majority
+        self,
+        fit: DawidSkeneFit | None,
+        seconds: float,
+        reason: str,
+        majority,
+        annotations: np.ndarray | None = None,
     ) -> dict[str, float | int]:
         """Round diagnostics for metrics.parquet. Every key here is defined in
         DAWID_SKENE_GLOSSARY.md, and tests/unit/test_dawid_skene_glossary.py fails if a key is
@@ -285,11 +298,13 @@ class SSFLStrategy(Strategy):
         """
         if self.hard_aggregation == HardAggregation.majority:
             return {}
+        coverage = _annotation_coverage(annotations)
         if fit is None:
             return {
                 "ds_status": DS_STATUS_CODES.get(reason, DS_STATUS_CODES["estimator_error"]),
                 "ds_applied": 0,
                 "ds_seconds": float(seconds),
+                **coverage,
             }
         comparable = fit.valid_mask & majority.valid_mask
         disagreement = (
@@ -317,6 +332,7 @@ class SSFLStrategy(Strategy):
             "ds_max_posterior_mean": fit.max_posterior_mean,
             "ds_disagreement_rate": disagreement,
             "ds_valid_rate": float(fit.valid_mask.mean()),
+            **coverage,
         }
 
     def configure_evaluate(
@@ -352,3 +368,20 @@ class SSFLStrategy(Strategy):
                 }
             )
         return aggregate_metricrecords(contents, "num-examples")
+
+
+def _annotation_coverage(annotations: np.ndarray | None) -> dict[str, float]:
+    """How much of the open set each client actually labelled, as a fraction.
+
+    The spread is what matters: ``min`` is the client closest to the exclusion threshold, and
+    a fit whose eligible clients each saw a different slice of the open set is a different
+    situation from one where they all saw the same slice, even at the same client count.
+    """
+    if annotations is None or annotations.ndim != 2 or annotations.shape[1] == 0:
+        return {}
+    per_client = (annotations != ABSTAIN).mean(axis=1)
+    return {
+        "ds_coverage_min": float(per_client.min()),
+        "ds_coverage_mean": float(per_client.mean()),
+        "ds_coverage_max": float(per_client.max()),
+    }

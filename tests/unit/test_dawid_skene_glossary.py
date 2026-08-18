@@ -70,8 +70,13 @@ def _emitted_dawid_skene_keys():
         majority_agreement=0.9,
         max_posterior_mean=0.8,
     )
-    without = ssfl_strategy.SSFLStrategy._dawid_skene_metrics(stub, None, 0.0, "warmup", majority)
-    with_fit = ssfl_strategy.SSFLStrategy._dawid_skene_metrics(stub, fit, 0.1, "ok", majority)
+    annotations = np.array([[0, 1, ABSTAIN], [0, ABSTAIN, ABSTAIN]], dtype=np.int8)
+    without = ssfl_strategy.SSFLStrategy._dawid_skene_metrics(
+        stub, None, 0.0, "warmup", majority, annotations
+    )
+    with_fit = ssfl_strategy.SSFLStrategy._dawid_skene_metrics(
+        stub, fit, 0.1, "ok", majority, annotations
+    )
     return set(without) | set(with_fit)
 
 

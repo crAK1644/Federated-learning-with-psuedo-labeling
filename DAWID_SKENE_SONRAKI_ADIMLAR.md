@@ -415,3 +415,75 @@ Kayıtlı 50-round shadow run'ının aggregation audit'i, open-set ground truth'
 
 Pozitif kontrol `gafgyt.combo` / `gafgyt.junk`, negatif kontrol `gafgyt.tcp` / `gafgyt.udp`.
 Öğretmene sorulacak olan artık "hangi çift" değil, "bu kanıtla bu seçim uygun mu".
+
+---
+
+## Aşama 7 sonucu (tamamlandı)
+
+Listedeki on beş kalemin çoğu zaten kaydediliyordu; eksik olan iki şey vardı. Birincisi, sealed
+open-set etiketlerine karşı ölçülen her şey (pseudo-label accuracy, tie item accuracy, hedef çift
+dilimleri) - bunlar sunucuda hesaplanamaz, çünkü sunucu open-set ground truth'u hiç görmemeli.
+İkincisi, client başına iki büyüklük.
+
+### Sunucu tarafına eklenen (`src/ssfl/strategies/ssfl.py`)
+
+- `ds_coverage_min` / `ds_coverage_mean` / `ds_coverage_max` - her client'ın open-set'in ne kadarını
+  gerçekten etiketlediği. `participating_*` ile aynı eksen değil: o, item başına client sayar; bu,
+  client başına item sayar. Warm-up round'larında da yazılıyor ve annotation matrisindeki bütün
+  client'ları kapsıyor, sonradan exclude edilenler dahil. `DAWID_SKENE_GLOSSARY.md`'ye eklendi,
+  yani rot guard testi bu anahtarları da koruyor.
+- Client başına tahmin edilen confusion matrix, audit `.npz` dosyasına
+  `dawid_skene_confusion` + `dawid_skene_confusion_clients` olarak. **Annotation matrisiyle aynı
+  restricted gate'in arkasında** (`dawid_skene_save_annotations`, varsayılan kapalı, round bazında
+  opt-in) - per-client davranış, annotation matrisiyle aynı hassasiyette. Satır sırası matristen
+  geri kazanılamadığı için eligible sender listesi yanında gidiyor
+  (`DawidSkeneFit.eligible_senders`).
+
+### Offline ledger (`scripts/round_metrics.py`)
+
+```bash
+uv run python -m scripts.round_metrics artifacts/runs/<run_id>
+```
+
+Sealed etiketleri `scripts/ds_headroom.py`'daki mevcut okuyucudan alıyor (yeni bir etiket dosyası
+yazılmıyor - `artifacts/data`'ya dosya eklemek manifest hash'ini, dolayısıyla bütün `run_id`'leri
+değiştirir). Round başına ürettikleri:
+
+| Sütun | İçerik |
+| --- | --- |
+| `broadcast_accuracy` | O round gerçekten yayınlanan etiketlerin open-set doğruluğu |
+| `majority_accuracy`, `dawid_skene_accuracy` | Shadow run'da iki kolu ayrı ayrı, aynı satırda |
+| `tie_count`, `tie_rate`, `tie_accuracy` | Tie item'lar ve **yalnız o item'lardaki** doğruluk |
+| `majority_tie_accuracy`, `dawid_skene_tie_accuracy` | Aynı tie maskesi, iki aggregator |
+| `margin_p10`, `margin_median`, `margin_mean` | Vote margin dağılımı |
+| `pair_a_recall`, `pair_b_recall`, `pair_a_precision`, `pair_b_precision`, `pair_macro_f1` | Hedef çift, open-set üzerinde |
+| `pair_confusion_ab`, `pair_confusion_ba` | Çiftin iki yönü ayrı - asimetri tek sayıda kaybolur |
+| `test_accuracy`, `test_pair_*_recall`, `test_pair_*_f1` | Sunucunun sealed test'te zaten yazdıkları |
+| `ds_*` | `metrics.parquet`'ten olduğu gibi |
+
+Run seviyesinde ayrıca `first_fallback_round` + `first_fallback_status` (6. round'da düşen run ile
+44. round'da düşen run aynı ortalamayı verir ama aynı şey değildir) ve ana metrik adayı
+`weaker_recall_last10_mean` - planın önerdiği "zayıf sınıfın 41-50. round recall ortalaması".
+
+Abstain edilen item'lar **yanlış sayılmıyor**, maskeden çıkarılıyor: yayınlanmayan bir item ile
+yanlış yayınlanan bir item aynı hata değil. Tie'ı olmayan bir round'un tie accuracy'si `NaN`,
+`0.0` değil - aksi halde ortalamalar aşağı çekilir. İkisi de testle sabitlendi
+(`tests/unit/test_round_metrics.py`).
+
+### Kayıtlı shadow run'da ilk çıktı
+
+| Round | broadcast | majority | dawid_skene | tie count | majority tie acc | DS tie acc | junk recall |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.1969 | 0.1969 | - | 1276 | 0.1019 | - | 0.0000 |
+| 10 | 0.6989 | 0.6989 | - | 362 | 0.2818 | - | 0.1067 |
+| 25 | 0.7078 | 0.7078 | 0.5548 | 190 | 0.2895 | 0.2000 | 0.1178 |
+| 50 | 0.7361 | 0.7361 | 0.5305 | 230 | 0.3783 | 0.2217 | 0.1467 |
+
+Shadow kontratı görünüyor: `broadcast` ile `majority` her round'da birebir aynı. Yeni bilgi tie
+sütunlarında - Dawid-Skene'in asıl iddiası tam olarak tie item'larda majority'yi geçmesiydi;
+kayıtlı run'da **tie'larda da geride** (0.2000 vs 0.2895, 0.2217 vs 0.3783). REPRODUCIBILITY #33
+ve #37'deki no-go kararıyla tutarlı, ve o kararı bu sefer tie ekseninde ölçüyor.
+
+`pair_macro_f1` 0.43 - 0.47 arasında ve `pair_confusion_ba` 800'den 764'e çok yavaş düşüyor:
+`gafgyt.junk` 50 round boyunca büyük ölçüde `gafgyt.combo` olarak etiketleniyor. Ana deneyin
+hareket ettirmesi gereken sayı bu.
