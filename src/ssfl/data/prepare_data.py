@@ -302,8 +302,19 @@ def run_full(config: DataPrepConfig) -> dict[str, Any]:
         atomic_write_json(staging / "label_map.json", LABEL_MAP)
 
         scenario_client_counts: dict[str, int] = {}
-        for scenario in (1, 2, 3):
-            assignments = build_scenario(scenario, devices, n_private, config.seed, config.dirichlet_alpha)
+        # Scenario 4 only when a target pair is named, so the default dataset -- and every run_id
+        # derived from its manifest hash -- is exactly what it was before scenario 4 existed.
+        scenarios = (1, 2, 3, 4) if config.target_classes else (1, 2, 3)
+        for scenario in scenarios:
+            assignments = build_scenario(
+                scenario,
+                devices,
+                n_private,
+                config.seed,
+                config.dirichlet_alpha,
+                target_classes=config.target_classes,
+                specialization=config.target_specialization,
+            )
             scenario_client_counts[str(scenario)] = len(assignments)
             atomic_write_json(
                 staging / "scenarios" / f"{scenario}.json",
@@ -407,6 +418,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=NormalizationMode.all_mini.value,
     )
     parser.add_argument("--dirichlet-alpha", type=float, default=0.1)
+    parser.add_argument(
+        "--target-classes",
+        type=int,
+        nargs=2,
+        default=(),
+        metavar=("A", "B"),
+        help="two class ids; naming them adds the controlled scenario 4 partition",
+    )
+    parser.add_argument(
+        "--target-specialization",
+        type=float,
+        default=0.0,
+        help="0.0 spreads the target pair evenly over clients, 1.0 gives each class to its "
+        "specialists only; per-client row counts are identical either way",
+    )
     parser.add_argument("--validate-only", action="store_true")
     return parser
 

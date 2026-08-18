@@ -48,6 +48,9 @@ class Scenario(int, Enum):
     one = 1
     two = 2
     three = 3
+    # Not a paper scenario: the controlled Dawid-Skene partition, available only in a dataset
+    # prepared with ``DataPrepConfig.target_classes`` set. See ssfl/data/partition.py.
+    four = 4
 
 
 class NormalizationMode(str, Enum):
@@ -133,7 +136,23 @@ class DataPrepConfig(BaseModel):
     test_ratio: float = 0.2
     normalization_mode: NormalizationMode = NormalizationMode.all_mini
     dirichlet_alpha: float = 0.1
+    # Scenario 4 is opt-in and generated only when a target pair is named. Leaving it off keeps
+    # the standard prepared dataset byte-for-byte what it was, and therefore every run_id stable.
+    target_classes: tuple[int, ...] = ()
+    target_specialization: float = 0.0
     validate_only: bool = False
+
+    @model_validator(mode="after")
+    def _check_target_pair(self) -> "DataPrepConfig":
+        if self.target_classes and len(set(self.target_classes)) != 2:
+            raise ValueError(
+                f"target_classes must name exactly two distinct classes, got {self.target_classes}"
+            )
+        if not 0.0 <= self.target_specialization <= 1.0:
+            raise ValueError(
+                f"target_specialization must be in [0, 1], got {self.target_specialization}"
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_ratios(self) -> "DataPrepConfig":
@@ -336,6 +355,15 @@ class ExperimentConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _check_controlled_scenario(self) -> "ExperimentConfig":
+        if self.scenario == Scenario.four and self.run_kind != RunKind.extension:
+            raise ValueError(
+                "scenario 4 is the controlled Dawid-Skene partition, not one of the paper's "
+                "three: set run_kind=extension so it cannot be reported in a paper cell"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _check_backbone_algorithm(self) -> "ExperimentConfig":
         if self.backbone != Backbone.cnn and self.algorithm != Algorithm.ssfl:
             raise ValueError(
@@ -377,7 +405,9 @@ class ExperimentConfig(BaseModel):
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     def num_clients(self) -> int:
-        return {Scenario.one: 27, Scenario.two: 89, Scenario.three: 89}[self.scenario]
+        return {Scenario.one: 27, Scenario.two: 89, Scenario.three: 89, Scenario.four: 89}[
+            self.scenario
+        ]
 
 
 # ---------------------------------------------------------------------------

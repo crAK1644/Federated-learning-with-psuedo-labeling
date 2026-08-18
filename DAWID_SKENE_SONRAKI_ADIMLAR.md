@@ -487,3 +487,94 @@ ve #37'deki no-go kararıyla tutarlı, ve o kararı bu sefer tie ekseninde ölç
 `pair_macro_f1` 0.43 - 0.47 arasında ve `pair_confusion_ba` 800'den 764'e çok yavaş düşüyor:
 `gafgyt.junk` 50 round boyunca büyük ölçüde `gafgyt.combo` olarak etiketleniyor. Ana deneyin
 hareket ettirmesi gereken sayı bu.
+
+
+## Aşama 5 sonucu (tamamlandı - tasarım ve konfigürasyon)
+
+Deney tasarımı ve altı kolun konfigürasyonu yazıldı; koşum GPU'ya bağlı ve bu ortamda
+çalıştırılmadı. Aşağıdaki her şey "hazır ve doğrulanmış konfigürasyon" seviyesindedir, sonuç
+değildir.
+
+### Eksik olan tek yetenek: scenario 4
+
+Aşama 5'in şartı net: *"client başına toplam private sample sayısı sabit tutulmalı"*. Mevcut üç
+senaryo bunu veremiyor - scenario 1 ve 2 shard tabanlı, scenario 3 Dirichlet ve client toplamlarını
+kendisi değiştiriyor. Yani mevcut senaryolarla "specialist" bir kol kurulsa, DS ile majority
+arasındaki her fark aynı zamanda bir veri hacmi farkı olurdu.
+
+Bunun için `src/ssfl/data/partition.py` içine **scenario 4** eklendi:
+
+- Her client tam olarak `private_count` satır alır, specialization seviyesi ne olursa olsun. Hedef
+  çiftten alınan/verilen satırlar arka plan sınıflarından takas edilerek dengelenir.
+- `specialization` **tek sürekli bir knob**: `0.0` düz dağıtım, `1.0` hedef sınıfı tamamen kendi
+  uzmanlarına verir. Dengeli ve specialist kollar aynı kod yolunu kullanır - iki ayrı partition
+  algoritması değil.
+- Specialist'ler ardışık değil **strided** seçilir (`arange(rank, num_clients, len(present))`), ki
+  index ile korelasyonlu başka bir etki yan yolcu olarak binmesin.
+- Arka plan sınıfları tek bir karıştırılmış havuzdan dağıtılır: arka plan kompozisyonu sinyal
+  değil, gürültü kalır.
+- Tamsayı bölüşümü `_largest_remainder` ile yapılır, böylece tahsisler tam olarak toplama eşit
+  çıkar ve tie'lar deterministik olarak düşük index'e gider.
+
+Scenario 4 **opt-in**: yalnızca `--target-classes` verilirse üretilir. Sebep manifest hash'i -
+varsayılan hazırlanmış veri kümesi, hash'i ve dolayısıyla **mevcut her `run_id`** scenario 4
+eklenmeden önceki ile birebir aynı kalır. `run_kind=extension` config seviyesinde zorunlu tutulur,
+çünkü bu bir paper senaryosu değil.
+
+Dokuz test bunu sabitliyor (`tests/unit/test_partition_scenario_4.py`): her specialization'da eşit
+satır sayısı, her private satırın tam bir kez kullanılması, specialization'ın **yalnızca** hedef
+çifti yoğunlaştırması (arka plan sahipleri 1'den fazla düşemez), tam specialist'in çiftin tek bir
+sınıfını tutması, determinizm ve seed bağımlılığı, hedef çifti içermeyen cihazın da temiz
+bölünmesi, `[0,1]` dışındaki specialization'ın reddedilmesi.
+
+### Sabit tutulanlar ve tek değişken
+
+| Sabit | Değişken |
+| --- | --- |
+| Open set, test seti, scaler, split'ler (aynı seed, aynı prepare) | Client specialization düzeni (`data_path`) |
+| Backbone (cnn), optimizer, learning rate (1e-4), batch size (80) | Aggregation kolu (`ssfl_hard_aggregation`) |
+| Round sayısı (50), local epoch (5), seed (2023) | |
+| **Client başına private satır sayısı** (scenario 4 garantisi) | |
+
+### Altı kol
+
+`configs/controlled_pair.yaml` (temel profil) + `configs/experiments_controlled_pair.yaml` (matris).
+Doğrulandı: altı giriş de `build_matrix_configs` ile hatasız çözülüyor.
+
+| Kol | data_path | ssfl_hard_aggregation |
+| --- | --- | --- |
+| `controlled_specialist_majority` | `artifacts/data-specialist` | `majority` |
+| `controlled_specialist_shadow` | `artifacts/data-specialist` | `dawid_skene_shadow` |
+| `controlled_specialist_active` | `artifacts/data-specialist` | `dawid_skene` |
+| `controlled_balanced_majority` | `artifacts/data-balanced` | `majority` |
+| `controlled_balanced_shadow` | `artifacts/data-balanced` | `dawid_skene_shadow` |
+| `controlled_balanced_active` | `artifacts/data-balanced` | `dawid_skene` |
+
+Bir dağılım içinde üç giriş **tek bir anahtarda** farklılaşıyor; dağılımlar arasında majority
+girişleri **tek bir anahtarda** farklılaşıyor. Aradaki fark başka hiçbir şeyle açıklanamaz.
+
+Hedef çift aşama 4'ten: `gafgyt.combo` (1) / `gafgyt.junk` (2). `gafgyt.tcp`/`gafgyt.udp` negatif
+kontroldür ve burada **kullanılmamalı** - float32 collapse yüzünden öğrenilemez olması
+aggregation ile ilgisi olmayan bir sebep.
+
+### Koşum sırası ve bütçe
+
+Veri kökleri (aynı seed, aynı split'ler, yalnızca client assignment manifest'i farklı):
+
+```bash
+uv run python -m ssfl.data.prepare_data --input data --output artifacts/data-balanced \
+    --seed 2023 --target-classes 1 2 --target-specialization 0.0
+uv run python -m ssfl.data.prepare_data --input data --output artifacts/data-specialist \
+    --seed 2023 --target-classes 1 2 --target-specialization 1.0
+uv run python -m ssfl.experiments.run_suite --matrix configs/experiments_controlled_pair.yaml
+```
+
+Matris **specialist bloğu ile başlıyor**: DS'in yardım etmesi beklenen rejim orası
+(REPRODUCIBILITY #35(b) izole ölçümde +0.29 - +0.40), dolayısıyla negatif sonucun en bilgilendirici
+olduğu yer de orası. Blok içinde majority ilk, çünkü diğer ikisi ona göre okunuyor ve tek başına
+anlamlı olan tek kol o.
+
+Ölçülen ~144 sn/round bu donanımda kol başına ~2 saat, tüm matris ~12 saat. GPU dolu, kollar
+paralelleştirilemez. Pilot **tek seed** - amacı etkiyi ölçmek değil, pipeline ve partition'ı
+doğrulamak; n=1 ile hiçbir fark kanıt değil ve #34 gürültü tabanı zaten yarım puan civarı. Beş seed
+ancak bu matris temiz koştuktan ve aşama 8 kapıları geçtikten sonra.

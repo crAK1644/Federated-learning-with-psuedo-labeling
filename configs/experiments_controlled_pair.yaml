@@ -1,0 +1,50 @@
+# Stage 5: two client distributions x three aggregation arms, one seed, 50 rounds each.
+#
+# Read the pairs across, not down. Within a distribution the three entries differ in one key
+# (`ssfl_hard_aggregation`) and share everything else, so the aggregator is the only explanation
+# for a gap. Across distributions the majority entries differ in one thing (`data_path`, i.e. how
+# specialized clients are on gafgyt.combo / gafgyt.junk), which is what makes the balanced arm a
+# usable reference rather than a second unrelated experiment.
+#
+# ORDER MATTERS IF ONLY PART OF THIS FITS. Run the specialist block first: specialization is the
+# regime where Dawid-Skene is predicted to help (REPRODUCIBILITY.md #35(b) measures +0.29 to +0.40
+# for specialist annotators in isolation), so it is where a negative result is most informative.
+# Within a block, majority first -- it is the reference the other two are read against, and it is
+# the only entry that is interpretable standing alone.
+#
+# BUDGET. ~144 s/round measured on this hardware at these settings, so each entry is ~2 h and the
+# full matrix is ~12 h. The GPU is saturated; entries cannot be overlapped to save wall clock.
+#
+# SEEDS. One seed for the pilot, deliberately. The pilot's job is to prove the pipeline and the
+# partition, not to measure an effect: with n=1 no difference here is evidence of anything, and
+# the #34 noise floor is around half a point. Five seeds only after this matrix runs clean, and
+# only for whichever arms are still worth the GPU time.
+entries:
+  - name: controlled_specialist_majority
+    base_profile: controlled_pair
+    overrides:
+      data_path: artifacts/data-specialist
+  - name: controlled_specialist_shadow
+    base_profile: controlled_pair
+    overrides:
+      data_path: artifacts/data-specialist
+      ssfl_hard_aggregation: dawid_skene_shadow
+  - name: controlled_specialist_active
+    base_profile: controlled_pair
+    overrides:
+      data_path: artifacts/data-specialist
+      ssfl_hard_aggregation: dawid_skene
+  - name: controlled_balanced_majority
+    base_profile: controlled_pair
+    overrides:
+      data_path: artifacts/data-balanced
+  - name: controlled_balanced_shadow
+    base_profile: controlled_pair
+    overrides:
+      data_path: artifacts/data-balanced
+      ssfl_hard_aggregation: dawid_skene_shadow
+  - name: controlled_balanced_active
+    base_profile: controlled_pair
+    overrides:
+      data_path: artifacts/data-balanced
+      ssfl_hard_aggregation: dawid_skene
