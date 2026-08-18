@@ -578,3 +578,69 @@ anlamlı olan tek kol o.
 paralelleştirilemez. Pilot **tek seed** - amacı etkiyi ölçmek değil, pipeline ve partition'ı
 doğrulamak; n=1 ile hiçbir fark kanıt değil ve #34 gürültü tabanı zaten yarım puan civarı. Beş seed
 ancak bu matris temiz koştuktan ve aşama 8 kapıları geçtikten sonra.
+
+## Aşama 6 sonucu (karar verildi)
+
+**Karar: Seçenek B (scalar weighted vote), majority'ye doğru shrink edilmiş hâlde - ve yalnızca
+aşama 8'in birincil kapısı geçerse inşa edilecek.**
+
+### Formül
+
+Eligible client `j` için DS'in kendi confusion matrix'inden türetilen balanced accuracy:
+
+```
+â_j = (1/K) * Σ_c M_j[c, c]          M_j[c, k] = P(client j "k" der | gerçek c)
+ā   = eligible client'lar üzerinde â_j ortalaması
+w_j(λ) = 1 + λ * (â_j - ā)           λ ∈ [0, 1]
+```
+
+Item `i` ve sınıf `k` için skor, ağırlıklı oy:
+
+```
+s(i, k) = Σ_{j : a_ji = k} w_j(λ)
+global_label(i) = argmin over argmax_k s(i, k)      (tie'lar hâlâ en düşük sınıf index'i)
+```
+
+`λ = 0` her ağırlığı 1 yapar ve **bit bazında mevcut majority vote'u** üretir. Shrink budur:
+tek bir dial, ve sıfır ucu mevcut davranışın kendisi. `â_j ∈ [0,1]` olduğundan `w_j ∈ [0,2]`;
+hiçbir client sıfırlanmaz, öğretmenin "herkesi kullan ama güvenilir olan daha etkili olsun"
+talebi bu.
+
+ABSTAIN oy vermez - eksik veri, sınıf değil. Bu noktada mevcut `aggregate_votes` ile aynı.
+
+### Neden B, C değil
+
+C'nin sınıfa özel ağırlıkları client başına `K² = 121` parametre ister. Bu ölçekte ~25 eligible
+client ve 900 open-set örneği var: ~22.500 annotation'dan ~3.025 hücre tahmin edilecek, çoğu hücre
+neredeyse boş. B ise client başına **tek sayı**, 25 parametre. C ayrıca aşama 3'ün ölçtüğü tie
+avantajını korumaz - orada avantajı yaratan anchor'lardı, ağırlık çözünürlüğü değil.
+
+A ise reddedildi çünkü sorunun kendisi o: 161 fallback round'unda reliability bilgisi tamamen
+atılıyor. Ama A **fallback olarak kalıyor** - `λ` shrink'i güvenli olmayan bir fit'i güvenli
+yapmaz, sadece güvenli bir fit'in etkisini sınırlar. Permutation ve agreement kapıları aynen
+yerinde kalır; ağırlıklar yalnızca kapılardan geçmiş bir fit'ten türetilir.
+
+### Ağırlıklar hangi veriyle tahmin ediliyor - ve aynı veri mi ölçüyor?
+
+**Evet, aynı round'un verisi hem ağırlıkları öğreniyor hem onlarla etiketleniyor. Bu protokolde
+kaçışı yok** ve açıkça yazılması gereken şey buydu: annotate edilmiş tek veri open set, ve
+tutulmuş (held-out) annotation yok. Üç şey bunu sınırlıyor:
+
+1. `λ` shrink'i, bu kendine referanslı tahminin bir etiketi ne kadar oynatabileceğini üstten
+   sınırlar. `λ = 0`'da hiç oynatamaz.
+2. Ağırlıklar yalnızca permutation/agreement kapılarından geçmiş fit'lerden gelir; kapıların en
+   önemlisi (`majority_agreement`) fit'in **dışında** bir çıpaya bağlı.
+3. **Değerlendirme double-dip değil**: başarı, estimator'ın hiç görmediği mühürlü open-set ve test
+   etiketlerine karşı offline ölçülüyor (`scripts/round_metrics.py`).
+
+Bir sonraki round'un ağırlıklarını bir önceki round'dan almak (warm start benzeri) düşünüldü ve
+alınmadı: pseudo-label kalitesi round'lar arası hızla değişiyor, bayat bir ağırlık kendi
+double-dipping'inden daha kötü bir bias getirir ve `dawid_skene_warm_start` zaten `false`.
+
+### Ne zaman inşa edilecek
+
+Hiçbir satır kod yazılmadı. Hybrid ancak aşama 8'in `primary_min_ds_tie_advantage` kriteri **ve**
+bütün validity kapıları geçerse inşa edilecek. Gerekçe: tie'lar ağırlıkların argmax'ı
+değiştirebileceği **tek** yer; DS orada majority'nin keyfi tie kuralını yenemiyorsa hiçbir `λ`
+onu kurtaramaz. Kayıtlı shadow run zaten tersini ölçüyor (aşama 7: 0.2217 vs 0.3783), yani şu
+anki kanıt hybrid'e karşı.
