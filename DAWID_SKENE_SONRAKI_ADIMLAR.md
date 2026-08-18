@@ -200,3 +200,80 @@ M-step'te class prior sayımına giriyordu; all-abstain kolon eklemek fit'i kayd
 `tests/protocol/test_dawid_skene_reference_validation.py` bunu teste bağlıyor ve ayrıca negatif
 kontrol içeriyor: confusion matrix bilerek transpose edildiğinde karşılaştırmanın hata vermesi
 gerekiyor. Doğrulayıcının kendisi başarısız olamıyorsa hiçbir şey kanıtlamaz.
+
+---
+
+## Aşama 3 sonucu (tamamlandı)
+
+`scripts/controlled_aggregation_experiments.py` planın üç kontrollü deneyini tek komutta
+çalıştırıyor. FL yok, model eğitimi yok, N-BaIoT yok: sadece aggregator, cevabı inşa gereği bilinen
+veri üzerinde.
+
+```bash
+uv run python scripts/controlled_aggregation_experiments.py
+```
+
+Bütün beklentiler koda `EXPECTATIONS` olarak **çalıştırmadan önce** yazıldı; script beklenti
+tutmazsa non-zero exit veriyor.
+
+### 1. Kolay yakınsama
+
+7 client, her biri yüzde 90 doğru, 1.000 ortak item, 20 replicate.
+
+| Dawid-Skene | Majority | Medyan EM adımı | Fit pass rate |
+| ---: | ---: | ---: | ---: |
+| 0.9995 | 0.9995 | 4 | 1.00 |
+
+Beklenti karşılandı: birkaç EM adımında yakınsıyor ve tavana oturuyor.
+
+### 2. Sistematik hata sweep'i
+
+7 client'ın içine, aynı yönde sistematik hata taşıyan client'lar teker teker konuyor (sınıf
+2'de yüzde 85 oranında sınıf 1 diyorlar, diğer üç sınıfta yüzde 90 doğrular). Şekil:
+`artifacts/validation/systematic_sweep.png`.
+
+| Hatalı client | Majority | Dawid-Skene | Fark | Saldırılan sınıfın recall'u |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 0.9995 | 0.9995 | -0.0000 | 0.9998 |
+| 1 | 0.9981 | 0.9992 | +0.0011 | 0.9988 |
+| 2 | 0.9898 | 0.9986 | +0.0087 | 0.9980 |
+| 3 | 0.9400 | 0.9968 | +0.0568 | 0.9936 |
+| 4 | 0.7901 | 0.9941 | +0.2040 | 0.9869 |
+| 5 | 0.7603 | 0.9815 | +0.2212 | 0.9543 |
+
+Beklenen yön çıktı: temiz havuzda fark yok, paylaşılan sistematik hata büyüdükçe Dawid-Skene
+öne geçiyor.
+
+**Dikkat edilmesi gereken nokta:** hatalı client'lar çoğunluğa geçtiğinde (4 ve 5) bile
+Dawid-Skene çökmüyor. Bunun nedeni buradaki hatanın *sınıfa koşullu* olması: hatalı client dört
+sınıfın üçünde hâlâ doğru, sadece birinde bozuk, ve confusion matrix bunu doğrudan temsil ediyor.
+Bu, bu hata biçimine ait bir sonuç, genel bir garanti değil. Her yerde yanlış olan bir client veya
+neredeyse bütün client'ların paylaştığı bir bias farklı bir rejim; bu deney onun hakkında kanıt
+vermiyor. Bu yüzden çoğunluk bölgesinde hiçbir beklenti assert edilmiyor.
+
+### 3. Yapay tie
+
+Anchor item'lar hangi client'ın güvenilir olduğunu belirliyor; target item'lar iki güvenilir ve
+iki güvenilmez client arasında birebir 2-2 bölünecek şekilde inşa ediliyor. Sadece tie item'ları
+üzerindeki accuracy:
+
+| Vaka | Anchor | Lowest-index tie-break | (replicate aralığı) | Rastgele tie-break | Dawid-Skene |
+| --- | ---: | ---: | :---: | ---: | ---: |
+| anchor'lı | 600 | 0.5050 | 0.17 - 0.79 | 0.5053 | **1.0000** |
+| tanımlanamaz | 0 | 0.4710 | 0.23 - 0.77 | 0.4915 | 0.4578 |
+
+İki sonuç:
+
+1. Anchor verisi varken Dawid-Skene tie'ların tamamını doğru çözüyor, majority ise şansta.
+2. Anchor olmadan iki hipotez birbirinin tam relabelling'i oluyor ve model bunu çözmüş gibi
+   *görünmüyor* (0.4578, yani şans). Negatif kontrol çalışıyor. Bu önemli: buradaki skor yüksek
+   çıksaydı, anchor'lı sonuç kanıt olmaktan çıkardı.
+
+**`TIE_BREAK_PLAN.md` için ölçülmüş veri:** mevcut "en küçük sınıf indeksi kazanır" kuralının
+tie doğruluğu replicate'ler arasında 0.17 ile 0.79 arasında geziniyor, ortalaması 0.5050. Yani
+kural sinyale değil, sınıf indekslerinin geometrisine göre karar veriyor - tam olarak plan
+notunun "arbitrary fiat, not a signal" iddiası, artık sayıyla.
+
+`tests/protocol/test_controlled_aggregation_experiments.py` beklentileri teste bağlıyor, ayrıca
+inşa edilen tie'ların gerçekten 2-2 olduğunu ve negatif kontrolün sessizce çözülebilir hâle
+gelmediğini kontrol ediyor.
