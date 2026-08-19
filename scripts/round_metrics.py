@@ -8,7 +8,8 @@ sealed open-set labels, which the server must never see. This joins the two offl
     uv run python scripts/round_metrics.py <run_dir> [--pair gafgyt.combo gafgyt.junk]
 
 Inputs
-  artifacts/data/audit/source_rows.parquet             sealed open-set labels, evaluation only
+  <run>/resolved_config.yaml's data_path, audit/source_rows.parquet   sealed open-set labels,
+                                                       evaluation only; --data overrides
   <run>/attempts/*/aggregation_audit/*.npz             per-round votes and labels
   <run>/metrics.parquet, per_class_metrics.parquet     what the server recorded live
 
@@ -169,6 +170,26 @@ def server_side(run_dir: Path, first: int, second: int) -> pd.DataFrame:
     return table
 
 
+def data_root_for(run_dir: Path, override: Path | None) -> Path:
+    """Where to read the sealed open-set labels from, defaulting to the root the run trained on.
+
+    The controlled target-pair arms train against ``artifacts/data-balanced`` and
+    ``artifacts/data-specialist`` rather than the default root. Scoring one of those against
+    ``artifacts/data`` does not crash -- the open splits have the same shape -- it silently compares
+    the broadcast labels to a different sampling of the dataset, which is the one failure this
+    ledger exists to catch rather than commit.
+    """
+    if override is not None:
+        return override
+    config = run_dir / "resolved_config.yaml"
+    if not config.exists():
+        raise SystemExit(f"{config} is missing; pass --data explicitly")
+    for line in config.read_text().splitlines():
+        if line.startswith("data_path:"):
+            return Path(line.split(":", 1)[1].strip())
+    raise SystemExit(f"{config} has no data_path; pass --data explicitly")
+
+
 def build(run_dir: Path, data_root: Path, pair: tuple[str, str]) -> tuple[pd.DataFrame, dict]:
     paths = audit_paths(run_dir)
     if not paths:
@@ -194,12 +215,14 @@ def build(run_dir: Path, data_root: Path, pair: tuple[str, str]) -> tuple[pd.Dat
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", type=Path)
-    parser.add_argument("--data", default=Path("artifacts/data"), type=Path)
+    # No default: it is resolved from the run itself, so a run trained on a non-default
+    # prepared root cannot be scored against the wrong sealed labels by omission.
+    parser.add_argument("--data", default=None, type=Path)
     parser.add_argument("--pair", nargs=2, default=list(DEFAULT_PAIR))
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
-    table, summary = build(args.run_dir, args.data, tuple(args.pair))
+    table, summary = build(args.run_dir, data_root_for(args.run_dir, args.data), tuple(args.pair))
     pd.set_option("display.width", 250)
     pd.set_option("display.max_columns", 60)
     print(table.to_string(index=False, float_format=lambda v: f"{v:.4f}"))

@@ -27,6 +27,21 @@
   the CPU-smoke acceptance gate run with `device=cpu` for determinism (MPS float32 kernels are not
   bit-reproducible across runs in the same way CPU is), GPU-scale `paper` runs are gated on
   user-provided CUDA hardware and are not executed as part of this build.
+- **This host cannot run an 89-client simulation.** Scenarios 2, 3, and 4 partition into 89 clients,
+  and every client participates in every round — there is no participation fraction to turn down, so
+  the simulation holds 89 ClientApp processes concurrently. A bare `import torch` plus
+  `ssfl.client_app` measures 327 MB resident before any data is loaded, i.e. ~29 GB for the
+  federation against this machine's 16 GiB. Attempting it (scenario 4, `controlled_pair_smoke`,
+  2026-08-19) drove the 1-minute load average to 216 and died during Ray actor startup; the failure
+  is silent in three separate places, which is why it is recorded here: `flwr run --stream` still
+  exited 0, the stream log stopped after Ray's startup warning with no traceback, and the run
+  directory was created with `run_start` as the only line in `events.jsonl`. Every completed run in
+  `artifacts/runs/` is scenario 1 (27 clients), which does fit. `scripts/run_controlled_pair.sh`
+  gates on 32 GB of RAM for this reason.
+- **`~/.flwr/runtime-envs` grows without bound.** Every `flwr run` provisions a fresh virtualenv
+  keyed by Flower's run id and never removes it; this host reached 10 GB across ~20 runs. It lives
+  outside the repo, so a `df` check on the checkout is measuring a directory the runs themselves are
+  filling. Clear it between experiment batches.
 - **The project directory's absolute path must not contain spaces.** This checkout lives under
   `.../Federated learning with psuedo labeling/...`. `flwr run`'s local-simulation SuperLink
   initializes its SQLite state via Alembic, and the installed `flwr` package builds Alembic's

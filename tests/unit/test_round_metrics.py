@@ -1,11 +1,19 @@
 """The stage-7 ledger scores labels against sealed open-set truth, so the arithmetic has to be
 right on cases where a plausible mistake would flatter the result."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.round_metrics import accuracy, first_fallback, pair_slice, round_row
+from scripts.round_metrics import (
+    accuracy,
+    data_root_for,
+    first_fallback,
+    pair_slice,
+    round_row,
+)
 
 ABSTAIN = -1
 
@@ -78,3 +86,32 @@ def test_the_first_fallback_is_the_earliest_one_not_the_last():
         "first_fallback_round": None,
         "first_fallback_status": None,
     }
+
+
+def test_the_sealed_label_root_comes_from_the_run_not_from_a_default(tmp_path):
+    """The controlled arms train on artifacts/data-specialist and artifacts/data-balanced.
+
+    Scoring one of those against the default root would not raise: the open splits have the same
+    shape, so it would quietly compare broadcast labels to a different sampling of the dataset.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "resolved_config.yaml").write_text(
+        "algorithm: ssfl\ndata_path: /somewhere/with a space/artifacts/data-specialist\nscenario: 4\n"
+    )
+
+    assert data_root_for(run_dir, None) == Path("/somewhere/with a space/artifacts/data-specialist")
+    # An explicit --data still wins, for re-scoring a run whose root has since moved.
+    assert data_root_for(run_dir, Path("elsewhere")) == Path("elsewhere")
+
+
+def test_a_run_that_cannot_name_its_data_root_refuses_to_guess(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    with pytest.raises(SystemExit):
+        data_root_for(run_dir, None)
+
+    (run_dir / "resolved_config.yaml").write_text("algorithm: ssfl\nscenario: 4\n")
+    with pytest.raises(SystemExit):
+        data_root_for(run_dir, None)

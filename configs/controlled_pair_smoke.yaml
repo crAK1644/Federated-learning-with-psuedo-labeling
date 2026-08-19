@@ -1,0 +1,60 @@
+# CPU pre-flight for the controlled target-pair matrix. Two rounds, tiny everything.
+#
+# This exists because configs/experiments_controlled_pair.yaml is roughly twelve GPU-hours, and the
+# failures worth catching -- a scenario-4 data root that does not load, a client count that does not
+# match the manifest, an audit payload the offline ledger cannot read -- all surface in round 1 and
+# cost nothing to find here. It proves the wiring runs. It proves nothing about whether Dawid-Skene
+# helps, and no number produced by this profile belongs in a result.
+#
+# Point data_path at whichever of the two roots is being checked; both should pass.
+#
+# Needs a host with at least 32 GB of RAM. Scenario 4 is 89 clients with full participation, so
+# the simulation holds 89 ClientApp processes at once at ~330 MB each; the 16 GB build machine
+# dies during Ray actor startup and `flwr run` exits 0 anyway (REPRODUCIBILITY.md, host section).
+# This profile has therefore never been run to completion here -- it is pre-flight for the GPU
+# host, to be run there first.
+profile: controlled_pair_smoke
+run_kind: extension
+algorithm: ssfl
+backbone: cnn
+scenario: 4
+seed: 2023
+
+data_path: artifacts/data-specialist
+output_path: artifacts/runs
+
+num_server_rounds: 2
+local_epochs: 1
+batch_size: 16
+paper_text_batch: false
+learning_rate: 1.0e-4
+device: cpu
+deterministic: true
+
+ssfl_threshold_policy: median
+ssfl_discriminator_mode: enabled
+ssfl_voting_mode: enabled
+ssfl_label_representation: hard
+ssfl_soft_label_round_decimals: null
+
+dsfl_temperature: 0.1
+
+checkpoint_interval: 1
+checkpoint_rounds: [1, 2]
+logging_interval: 1
+log_every_batch: false
+
+client_num_cpus: 1.0
+client_num_gpus: 0.0
+max_concurrent_clients: 8
+
+# Shadow, because it exercises both aggregators in one run: the estimator fits and is recorded
+# while the majority labels are what actually go out, so a single smoke run covers the code paths
+# all three real arms use.
+ssfl_hard_aggregation: dawid_skene_shadow
+dawid_skene_warmup_rounds: 0
+dawid_skene_max_iterations: 100
+dawid_skene_min_iterations: 2
+dawid_skene_min_clients: 3
+dawid_skene_save_annotations: true
+dawid_skene_annotation_rounds: [1, 2]
