@@ -104,8 +104,11 @@ if [[ -r /proc/meminfo ]]; then
 else
   ram_gb="$(( $(sysctl -n hw.memsize) / 1073741824 ))"
 fi
-[[ "${ram_gb:-0}" -ge 32 ]] ||
-  fail "${ram_gb}G RAM; 89 concurrent ClientApps need ~29 GB resident, 32 GB minimum"
+#    The threshold is 30 rather than 32 because MemTotal is what the kernel can hand out, not what
+#    is on the board: the reference GPU host has 32 GB of DIMMs and reports 31. It carried 89
+#    ClientApps through the pre-flight, so 31 is known-sufficient and must not be rejected.
+[[ "${ram_gb:-0}" -ge 30 ]] ||
+  fail "${ram_gb}G RAM; 89 concurrent ClientApps need ~29 GB resident, 30 GB minimum"
 
 # 5. The card, last. `device: cuda` in the profile is a request, not a guarantee -- without this
 #    check the matrix silently trains on CPU and takes days instead of hours.
