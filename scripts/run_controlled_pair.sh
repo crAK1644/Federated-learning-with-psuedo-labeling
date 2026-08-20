@@ -15,7 +15,18 @@
 # offline ledger reads is the one the run writes.
 #
 # Expects an RTX 3090 or equivalent: configs/controlled_pair.yaml requests 0.125 GPU per ClientApp
-# actor with 8 concurrent, the split measured to saturate a 24 GB card for this model.
+# actor with 8 concurrent, the split measured to saturate a 24 GB card for this model. The host also
+# needs 32 GB of RAM and 20 GB of free disk -- both are gated below, for reasons that are written
+# next to each gate.
+#
+# On a fresh host, before any of the above:
+#
+#   git clone -b dawid-skene-validation <this repo> && cd Federated-learning-with-psuedo-labeling
+#   uv sync                                  # clone into a path with no spaces; see CLAUDE.md
+#   cp -r /path/to/nbaiot-csvs data          # the 89 raw N-BaIoT CSVs, flat
+#   uv run python -m ssfl.data.prepare_data --input data --output artifacts/data --seed 2023
+#
+# then the two controlled roots, which the data gate below prints in full if they are missing.
 
 set -uo pipefail
 
