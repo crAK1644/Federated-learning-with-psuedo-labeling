@@ -336,3 +336,28 @@ def test_a_missing_input_directory_says_so_instead_of_blaming_the_archive(tmp_pa
 
     with pytest.raises(SystemExit, match="does not exist"):
         _resolve_input(config)
+
+
+def test_a_wrapper_directory_is_named_as_the_cause_not_the_file_names(tmp_path):
+    """The nested layout resolves <DeviceName>/ through device_info.csv at the --input root. Extract
+    the archive one level deep and every CSV is present, none matches, and the file names -- which
+    are fine -- are the only thing the old message pointed at."""
+    wrapper = tmp_path / "extracted" / "N-BaIoT"
+    (wrapper / "Danmini_Doorbell" / "gafgyt_attacks").mkdir(parents=True)
+    (wrapper / "Danmini_Doorbell" / "gafgyt_attacks" / "combo.csv").write_text("f0\n1\n")
+    (wrapper / "device_info.csv").write_text("DeviceID,DeviceName\n1,Danmini_Doorbell\n")
+
+    with pytest.raises(DataDiscoveryError, match="no device_info.csv"):
+        discover_source_files(tmp_path / "extracted")
+
+    # Pointed one level deeper, the same tree resolves.
+    assert discover_source_files(wrapper)[0].class_key == "gafgyt.combo"
+
+
+def test_a_device_info_without_its_header_is_reported_as_such(tmp_path):
+    (tmp_path / "Danmini_Doorbell" / "gafgyt_attacks").mkdir(parents=True)
+    (tmp_path / "Danmini_Doorbell" / "gafgyt_attacks" / "combo.csv").write_text("f0\n1\n")
+    (tmp_path / "device_info.csv").write_text("id,name\n1,Danmini_Doorbell\n")
+
+    with pytest.raises(DataDiscoveryError, match="no DeviceID header"):
+        discover_source_files(tmp_path)

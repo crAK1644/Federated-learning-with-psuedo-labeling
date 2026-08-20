@@ -84,8 +84,9 @@ def discover_source_files(input_path: Path) -> list[SourceFile]:
         raise DataDiscoveryError(f"input path does not exist or is not a directory: {input_path}")
 
     device_name_to_id = _read_device_names(input_path)
+    present = sorted(input_path.rglob("*.csv"))
     found: dict[tuple[int, str], Path] = {}
-    for path in sorted(input_path.rglob("*.csv")):
+    for path in present:
         parsed = _parse_flat(path)
         if parsed is None:
             parsed = _parse_nested(path, device_name_to_id)
@@ -100,9 +101,27 @@ def discover_source_files(input_path: Path) -> list[SourceFile]:
         found[key] = path
 
     if not found:
+        # Both layouts can fail for the same boring reason -- the CSVs are one directory deeper than
+        # --input, because the archive extracted into a wrapper -- and the bare "nothing found"
+        # message sends the reader looking at file names instead. Report what was actually seen.
+        examples = [str(path.relative_to(input_path)) for path in present[:3]]
+        if device_name_to_id:
+            detail = f"device_info.csv maps {len(device_name_to_id)} device names"
+        elif not (input_path / "device_info.csv").exists():
+            detail = (
+                f"there is no device_info.csv at {input_path / 'device_info.csv'}, and the nested "
+                "UCI layout can only be matched through it -- if the archive extracted into a "
+                "wrapper directory, pass that directory as --input"
+            )
+        else:
+            detail = (
+                f"{input_path / 'device_info.csv'} exists but has no DeviceID header, so no "
+                "device name could be resolved"
+            )
         raise DataDiscoveryError(
             f"no recognizable N-BaIoT CSVs found under {input_path} "
-            "(expected flat '<device>.<family>.<attack>.csv' or nested UCI layout)"
+            f"(expected flat '<device>.<family>.<attack>.csv' or nested UCI layout). "
+            f"{len(present)} CSVs are present, e.g. {examples}; {detail}"
         )
 
     return [
