@@ -14,7 +14,7 @@ from ssfl.data.io import DataValidationError, load_source_matrix, validate_sourc
 from ssfl.data.labels import LABEL_MAP, NUM_FEATURES
 from ssfl.data.manifest import compute_allocation_stats, gini, js_divergence
 from ssfl.data.partition import build_scenario
-from ssfl.data.prepare_data import run_full, run_validate_only
+from ssfl.data.prepare_data import _resolve_input, run_full, run_validate_only
 from ssfl.data.sampling import sample_and_split, subset_seed
 from ssfl.data.scaling import fit_scaler, reshape_eq19
 
@@ -327,3 +327,12 @@ def test_every_cli_flag_reaches_the_config(monkeypatch):
     assert config.target_classes == (1, 2)
     assert str(config.input_path) == "in"
     assert str(config.output_path) == "out"
+
+
+def test_a_missing_input_directory_says_so_instead_of_blaming_the_archive(tmp_path):
+    """A path with no suffix is never an archive, so "unsupported archive type" sends the reader
+    after a decompression problem they do not have."""
+    config = DataPrepConfig(input_path=tmp_path / "data", output_path=tmp_path / "out", seed=2023)
+
+    with pytest.raises(SystemExit, match="does not exist"):
+        _resolve_input(config)

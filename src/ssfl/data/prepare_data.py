@@ -51,6 +51,16 @@ NUM_LABELS = len(LABEL_MAP)
 def _resolve_input(config: DataPrepConfig) -> tuple[Path, Path | None]:
     if config.input_path.is_dir():
         return config.input_path, None
+    if not config.input_path.exists():
+        # Without this the missing directory falls through to the archive branch and is reported as
+        # "unsupported archive type", which sends the reader looking for a decompression problem
+        # they do not have. A path with no suffix is never an archive.
+        raise SystemExit(
+            f"--input {config.input_path} does not exist. Point it at the directory holding the "
+            "N-BaIoT CSVs -- either the flat form (1.benign.csv, 4.mirai.udp.csv, ... plus "
+            "device_info.csv) or the UCI nested form (<DeviceName>/benign_traffic.csv, "
+            "<DeviceName>/gafgyt_attacks/combo.csv) -- or at a .zip of one of those."
+        )
     extract_dir = Path(tempfile.mkdtemp(prefix="ssfl-extract-"))
     resolved = ensure_extracted(config.input_path, extract_dir)
     return resolved, extract_dir
