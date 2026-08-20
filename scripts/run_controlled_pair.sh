@@ -46,16 +46,34 @@ esac
 #    directory is not enough: a root prepared without --target-classes looks complete and is
 #    missing exactly the file this experiment needs.
 for root in artifacts/data-balanced artifacts/data-specialist; do
-  [[ -f "$REPO_ROOT/$root/scenarios/4.json" ]] ||
-    fail "$root has no scenario 4; re-run prepare_data with --target-classes 1 2"
+  [[ -f "$REPO_ROOT/$root/scenarios/4.json" ]] || {
+    printf 'PREFLIGHT FAILED: %s has no scenarios/4.json. Prepare both roots first:\n' "$root" |
+      tee "$STATUS_FILE"
+    cat <<'PREP'
+
+  uv run python -m ssfl.data.prepare_data --input data --output artifacts/data-balanced \
+      --seed 2023 --target-classes 1 2 --target-specialization 0.0
+  uv run python -m ssfl.data.prepare_data --input data --output artifacts/data-specialist \
+      --seed 2023 --target-classes 1 2 --target-specialization 1.0
+
+Same seed, same splits, same scaler; only the client assignment manifest differs. Both need the
+raw N-BaIoT CSVs under ./data. Roughly ten minutes each.
+PREP
+    exit 1
+  }
 done
 
 # 3. Disk. Checkpoints dominate at roughly 26 MB per checkpointed round, and controlled_pair.yaml
 #    checkpoints every round (same as the proven 200-round profiles: mid-run resume is not wired,
 #    so checkpoints are the only record of a partial run). That is ~1.3 GB per arm, ~8 GB for the
-#    matrix, plus room for Ray's object spill.
-avail_gb="$(df -g "$REPO_ROOT" | awk 'NR==2 {print $4}')"
-[[ "${avail_gb:-0}" -ge 20 ]] || fail "only ${avail_gb}G free; the matrix needs headroom"
+#    matrix, plus room for Ray's object spill. Flower also provisions a fresh ~500 MB virtualenv
+#    per run under ~/.flwr/runtime-envs and never reaps it -- another ~3 GB across the six arms,
+#    on whichever filesystem $HOME lives on.
+# `df -Pk` and not `df -g`: -g is a BSD flag that GNU df rejects, and this script is written on a
+# Mac to run on a Linux box. -P also stops GNU df wrapping long device names onto a second line.
+avail_gb="$(df -Pk "$REPO_ROOT" | awk 'NR==2 {print int($4 / 1048576)}')"
+[[ "${avail_gb:-0}" -ge 20 ]] ||
+  fail "only ${avail_gb}G free; the matrix needs headroom (\`rm -rf ~/.flwr/runtime-envs\` if that is where it went)"
 
 # 4. Memory. Scenario 4 is 89 clients and every one of them participates in every round -- there is
 #    no participation fraction to turn down -- so the simulation holds 89 ClientApp processes at
