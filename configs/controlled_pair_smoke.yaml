@@ -13,6 +13,13 @@
 # dies during Ray actor startup and `flwr run` exits 0 anyway (REPRODUCIBILITY.md, host section).
 # This profile has therefore never been run to completion here -- it is pre-flight for the GPU
 # host, to be run there first.
+#
+# device is cpu so the profile also runs on a machine without a card, but on the GPU host
+# override it -- the point of a pre-flight there is to exercise the path the matrix uses:
+#
+#   uv run flwr run . --run-config 'profile="controlled_pair_smoke" algorithm="ssfl" \
+#       scenario=4 device="cuda"' --federation-config 'num-supernodes=89 \
+#       client-resources-num-cpus=1 client-resources-num-gpus=0.125' --stream
 profile: controlled_pair_smoke
 run_kind: extension
 algorithm: ssfl

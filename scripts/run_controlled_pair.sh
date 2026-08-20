@@ -6,8 +6,9 @@
 # eleven hours of GPU time costs more than failing in the first second. The matrix is resumable, so
 # re-running this after an interruption picks up at the first unfinished arm.
 #
-#   uv run flwr run . --run-config 'profile="controlled_pair_smoke" algorithm="ssfl" scenario=4' \
-#     --federation-config 'num-supernodes=89' --stream          # ~2 min, run this first
+#   uv run flwr run . --run-config 'profile="controlled_pair_smoke" algorithm="ssfl" scenario=4 \
+#       device="cuda"' --federation-config 'num-supernodes=89 client-resources-num-cpus=1 \
+#       client-resources-num-gpus=0.125' --stream                # ~2 min, run this first
 #   bash scripts/run_controlled_pair.sh                          # ~12 h, seed 2023
 #   bash scripts/run_controlled_pair.sh configs/experiments_controlled_pair_seed2024.yaml 2024
 #
