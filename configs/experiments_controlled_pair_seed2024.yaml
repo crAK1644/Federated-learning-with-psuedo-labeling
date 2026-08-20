@@ -1,0 +1,48 @@
+# Stage 5 replicate: the same six arms at seed 2024.
+#
+# Identical to configs/experiments_controlled_pair.yaml in every way except `seed`. The entry names
+# are deliberately unchanged -- these are the same arms, not new ones -- so the run directories
+# differ only by run-id hash and scripts/controlled_pair_criteria.py requires --seed 2024 to read
+# this replicate rather than silently mixing it with another.
+#
+# Read the #34 noise floor before reading any single-seed gap: it is around half a point, so a
+# difference smaller than that is not a difference. Replicates are what turn the pilot's n=1 into
+# something the criteria can actually be applied to.
+#
+# ~12 h. Run configs/experiments_controlled_pair.yaml (seed 2023) to completion first; a replicate
+# of a matrix that never ran clean measures nothing.
+entries:
+  - name: controlled_specialist_majority
+    base_profile: controlled_pair
+    overrides:
+      seed: 2024
+      data_path: artifacts/data-specialist
+  - name: controlled_specialist_shadow
+    base_profile: controlled_pair
+    overrides:
+      seed: 2024
+      data_path: artifacts/data-specialist
+      ssfl_hard_aggregation: dawid_skene_shadow
+  - name: controlled_specialist_active
+    base_profile: controlled_pair
+    overrides:
+      seed: 2024
+      data_path: artifacts/data-specialist
+      ssfl_hard_aggregation: dawid_skene
+  - name: controlled_balanced_majority
+    base_profile: controlled_pair
+    overrides:
+      seed: 2024
+      data_path: artifacts/data-balanced
+  - name: controlled_balanced_shadow
+    base_profile: controlled_pair
+    overrides:
+      seed: 2024
+      data_path: artifacts/data-balanced
+      ssfl_hard_aggregation: dawid_skene_shadow
+  - name: controlled_balanced_active
+    base_profile: controlled_pair
+    overrides:
+      seed: 2024
+      data_path: artifacts/data-balanced
+      ssfl_hard_aggregation: dawid_skene

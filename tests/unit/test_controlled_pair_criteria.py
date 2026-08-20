@@ -4,11 +4,13 @@ The criteria themselves are checked against real runs, which do not exist yet. W
 now is the thing that would quietly void them: an evaluator that passes everything.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.controlled_pair_criteria import ARMS, CRITERIA, evaluate
+from scripts.controlled_pair_criteria import ARMS, CRITERIA, evaluate, load_arm
 
 
 def arm_table(**overrides) -> pd.DataFrame:
@@ -104,3 +106,33 @@ def test_a_missing_measurement_fails_rather_than_passes():
 def test_every_declared_criterion_is_actually_checked():
     """A threshold nobody reads is not pre-registration, it is decoration."""
     assert {row["criterion"] for row in evaluate(arms())} == set(CRITERIA)
+
+
+def _fake_run(runs: Path, arm: str, seed: int) -> Path:
+    """A run directory named the way run_suite actually names them."""
+    run_dir = runs / f"ssfl-s4-{arm}-{seed:016x}"
+    run_dir.mkdir(parents=True)
+    (run_dir / "resolved_config.yaml").write_text(f"profile: {arm}\nscenario: 4\nseed: {seed}\n")
+    arm_table().to_parquet(run_dir / "round_metrics.parquet")
+    return run_dir
+
+
+def test_an_arm_is_found_under_the_run_id_that_run_suite_actually_produces(tmp_path):
+    """Run directories are <algorithm>-s<scenario>-<profile>-<hash>, so the arm name is in the
+    middle. A pattern anchored at the start of the directory name matches nothing at all."""
+    _fake_run(tmp_path, "controlled_specialist_majority", 2023)
+
+    assert len(load_arm(tmp_path, "controlled_specialist_majority")) == 50
+
+
+def test_replicate_seeds_refuse_to_be_averaged_by_accident(tmp_path):
+    for seed in (2023, 2024):
+        _fake_run(tmp_path, "controlled_specialist_majority", seed)
+
+    with pytest.raises(SystemExit, match="pass --seed"):
+        load_arm(tmp_path, "controlled_specialist_majority")
+
+    assert len(load_arm(tmp_path, "controlled_specialist_majority", seed=2024)) == 50
+
+    with pytest.raises(FileNotFoundError, match="at seed 2025"):
+        load_arm(tmp_path, "controlled_specialist_majority", seed=2025)

@@ -85,12 +85,40 @@ Run five more seeds only if the primary criteria pass on this pilot.\
 """
 
 
-def load_arm(runs_root: Path, name: str) -> pd.DataFrame:
-    """One arm's per-round ledger, produced by scripts/round_metrics.py."""
-    matches = sorted(runs_root.glob(f"**/{name}*/round_metrics.parquet"))
+def run_seed(run_dir: Path) -> int | None:
+    """The seed a run was configured with, read back from its own resolved config."""
+    config = run_dir / "resolved_config.yaml"
+    if not config.exists():
+        return None
+    for line in config.read_text().splitlines():
+        if line.startswith("seed:"):
+            return int(line.split(":", 1)[1].strip())
+    return None
+
+
+def load_arm(runs_root: Path, name: str, seed: int | None = None) -> pd.DataFrame:
+    """One arm's per-round ledger, produced by scripts/round_metrics.py.
+
+    Run directories are named ``<algorithm>-s<scenario>-<profile>-<hash>`` and the arm name is the
+    profile, so the arm name sits in the middle of the directory name rather than at its start.
+    """
+    matches = sorted(runs_root.glob(f"*{name}*/round_metrics.parquet"))
+    if seed is not None:
+        matches = [path for path in matches if run_seed(path.parent) == seed]
     if not matches:
-        raise FileNotFoundError(f"no round_metrics.parquet for arm {name!r} under {runs_root}")
-    return pd.read_parquet(matches[-1])
+        seed_note = "" if seed is None else f" at seed {seed}"
+        raise FileNotFoundError(
+            f"no round_metrics.parquet for arm {name!r}{seed_note} under {runs_root}"
+        )
+    if len(matches) > 1:
+        # Replicate seeds land in sibling directories that differ only by run-id hash. Picking one
+        # would mean reporting a criterion over an arbitrary mix of seeds, which is worse than
+        # refusing.
+        listed = "\n  ".join(str(path.parent.name) for path in matches)
+        raise SystemExit(
+            f"{len(matches)} runs match arm {name!r}; pass --seed to choose one:\n  {listed}"
+        )
+    return pd.read_parquet(matches[0])
 
 
 def settled(table: pd.DataFrame, last: int = 0) -> pd.DataFrame:
@@ -176,9 +204,10 @@ def evaluate(arms: dict[str, pd.DataFrame]) -> list[dict]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs", type=Path, default=Path("artifacts/runs"))
+    parser.add_argument("--seed", type=int, default=None, help="required once replicates exist")
     args = parser.parse_args()
 
-    arms = {name: load_arm(args.runs, name) for name in ARMS}
+    arms = {name: load_arm(args.runs, name, args.seed) for name in ARMS}
     results = evaluate(arms)
     for row in results:
         mark = "PASS" if row["passed"] else "FAIL"

@@ -8,7 +8,8 @@
 #
 #   uv run flwr run . --run-config 'profile="controlled_pair_smoke" algorithm="ssfl" scenario=4' \
 #     --federation-config 'num-supernodes=89' --stream          # ~2 min, run this first
-#   bash scripts/run_controlled_pair.sh                          # ~12 h
+#   bash scripts/run_controlled_pair.sh                          # ~12 h, seed 2023
+#   bash scripts/run_controlled_pair.sh configs/experiments_controlled_pair_seed2024.yaml 2024
 #
 # The smoke is not optional on a host that has never run this experiment: it is the only cheap check
 # that the scenario-4 roots load, that 89 supernodes fit in memory, and that the audit payload the
@@ -32,10 +33,15 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-MATRIX="$REPO_ROOT/configs/experiments_controlled_pair.yaml"
+# Optional args: a different matrix (the seed replicates) and the seed to score it at. The seed is
+# not derived from the filename -- criteria run against whichever seed is named, and a wrong guess
+# there is a silently mixed comparison.
+MATRIX="${1:-$REPO_ROOT/configs/experiments_controlled_pair.yaml}"
+SEED="${2:-}"
 LOG_DIR="$REPO_ROOT/artifacts/logs"
-RUN_LOG="$LOG_DIR/controlled_pair.log"
-STATUS_FILE="$LOG_DIR/controlled_pair.status"
+MATRIX_TAG="$(basename "$MATRIX" .yaml)"
+RUN_LOG="$LOG_DIR/$MATRIX_TAG.log"
+STATUS_FILE="$LOG_DIR/$MATRIX_TAG.status"
 PYTHON="$REPO_ROOT/.venv/bin/python"
 
 cd "$REPO_ROOT" || exit 1
@@ -132,7 +138,8 @@ for run_dir in "$REPO_ROOT"/artifacts/runs/*controlled_*; do
 done
 
 # Pre-registered criteria. Non-zero here is a real answer about the experiment, not a broken run.
-"$PYTHON" -m scripts.controlled_pair_criteria --runs "$REPO_ROOT/artifacts/runs" | tee -a "$RUN_LOG"
+"$PYTHON" -m scripts.controlled_pair_criteria --runs "$REPO_ROOT/artifacts/runs" \
+  ${SEED:+--seed "$SEED"} | tee -a "$RUN_LOG"
 criteria_exit=${PIPESTATUS[0]}
 
 if [[ $criteria_exit -eq 0 ]]; then
