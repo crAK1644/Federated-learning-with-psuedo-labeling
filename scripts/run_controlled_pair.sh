@@ -8,7 +8,7 @@
 #
 #   uv run flwr run . --run-config 'profile="controlled_pair_smoke" algorithm="ssfl" scenario=4 \
 #       device="cuda"' --federation-config 'num-supernodes=89 client-resources-num-cpus=1 \
-#       client-resources-num-gpus=0.125' --stream                # ~2 min, run this first
+#       client-resources-num-gpus=0.0625' --stream                # ~2 min, run this first
 #   bash scripts/run_controlled_pair.sh                          # ~12 h, seed 2023
 #   bash scripts/run_controlled_pair.sh configs/experiments_controlled_pair_seed2024.yaml 2024
 #
@@ -16,7 +16,7 @@
 # that the scenario-4 roots load, that 89 supernodes fit in memory, and that the audit payload the
 # offline ledger reads is the one the run writes.
 #
-# Expects an RTX 3090 or equivalent: configs/controlled_pair.yaml requests 0.125 GPU per ClientApp
+# Expects an RTX 3090 or equivalent: configs/controlled_pair.yaml requests 0.0625 GPU per ClientApp
 # actor with 8 concurrent, the split measured to saturate a 24 GB card for this model. The host also
 # needs 32 GB of RAM and 20 GB of free disk -- both are gated below, for reasons that are written
 # next to each gate.
