@@ -118,6 +118,11 @@ def render(matrix: Path) -> str:
         total = total_rounds(run_dir)
         done, started, last_ts = progress(run_dir)
         complete = (run_dir / "summary.json").exists()
+        if complete and total:
+            # run_suite gzips attempts/*/events.jsonl the moment an entry finishes, so `progress`
+            # -- which reads the plain name -- sees nothing and the finished arm reads back as
+            # round 0. summary.json only exists once every round ran, so trust it over the events.
+            done = total
         done_total += done
         pending_total += max(0, total - done)
 
