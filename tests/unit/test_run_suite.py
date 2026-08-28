@@ -12,6 +12,7 @@ from ssfl.experiments.run_suite import (
     build_matrix_configs,
     compress_completed_jsonl,
     run_suite,
+    verify_dataset_manifest,
 )
 
 
@@ -220,3 +221,37 @@ def test_compress_completed_jsonl_is_lossless_and_idempotent(tmp_path) -> None:
     with gzip.open(compressed[1], "rt") as stream:
         assert stream.read() == '{"event":"training_epoch","epoch":1}\n'
     assert compress_completed_jsonl(tmp_path) == []
+
+
+def _matrix_with_hash(tmp_path, expected):
+    matrix_path = tmp_path / "hashed_matrix.yaml"
+    _write_yaml(
+        matrix_path,
+        {
+            "dataset_manifest_hash": expected,
+            "entries": [{"name": "variant_a", "base_profile": "base"}],
+        },
+    )
+    return matrix_path
+
+
+def test_verify_dataset_manifest_aborts_on_a_different_partition(tmp_path, configs_dir) -> None:
+    """A multi-arm comparison is only a comparison if every arm saw the same partition, and a
+    re-prepared artifacts/data/ changes nothing that any other check would notice."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "dataset_manifest.json").write_text(json.dumps({"manifest_hash": "actual"}))
+    matrix_path = _matrix_with_hash(tmp_path, "expected")
+    entries = build_matrix_configs(matrix_path, configs_dir=configs_dir)
+
+    with pytest.raises(SystemExit, match="requires 'expected'"):
+        verify_dataset_manifest(matrix_path, entries)
+
+    (data_dir / "dataset_manifest.json").write_text(json.dumps({"manifest_hash": "expected"}))
+    verify_dataset_manifest(matrix_path, entries)
+
+
+def test_verify_dataset_manifest_is_opt_in(tmp_path, configs_dir) -> None:
+    matrix_path = tmp_path / "plain_matrix.yaml"
+    _write_yaml(matrix_path, {"entries": [{"name": "variant_a", "base_profile": "base"}]})
+    verify_dataset_manifest(matrix_path, build_matrix_configs(matrix_path, configs_dir=configs_dir))

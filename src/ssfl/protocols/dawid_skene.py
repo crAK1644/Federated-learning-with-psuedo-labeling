@@ -10,10 +10,19 @@ modelled class). EM alternates a posterior E-step with a pseudocount-regularized
 float64; the E-step works in log space with log-sum-exp normalization because a product over ~9
 clients of probabilities near the epsilon floor underflows float64 directly.
 
+This module is the estimator, not the policy. It reports what it found; ``strategies/ssfl.py``
+decides what to broadcast. That split is what lets the hybrid arm and the Dawid-Skene-only arm of
+DENEY_1_SCENARIO_3_DENEY_PLANI.md consume one identical fit and differ only in what they do with
+it: hybrid broadcasts on ``status == "ok"``, Dawid-Skene-only broadcasts on ``numerically_valid``.
+
 Safety contract (DAWID_SKENE_REVIEW.md F3, and the approval brief's safeguards):
 
-* Every failure path returns ``status != ok`` so the caller falls back to deterministic majority.
-  This module never returns a partially-converged or non-finite label vector.
+* Every failure path returns ``status != ok`` so a caller that wants the hybrid policy falls back
+  to deterministic majority. ``labels``/``valid_mask`` stay empty unless the status is ``ok``.
+* ``numerically_valid`` is the weaker, policy-free question: did EM produce finite parameters and
+  a normalized posterior? A fit can be numerically valid and still fail a gate (non-convergence,
+  or a majority-anchored permutation check). Such a fit exposes ``candidate_labels`` /
+  ``candidate_valid_mask``; a numerically broken one exposes nothing at all.
 * The likelihood is invariant to permuting the hidden classes, and the returned integer is used
   directly as a distillation target, so a permutation check (diagonal dominance + agreement with
   majority) runs after convergence and is a fallback condition, not a warning.
@@ -28,6 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 ABSTAIN = -1
 
@@ -53,6 +63,9 @@ class DawidSkeneSettings:
     # see the permutation check in fit_dawid_skene for why an absolute floor cannot work here.
     permutation_min_diagonal_ratio: float = 0.7
     permutation_min_majority_agreement: float = 0.5
+    # Deterministic latent-class -> label-space permutation after EM. Scored on the fitted
+    # confusion matrices alone: no majority labels, no ground truth. See ``_align_classes``.
+    class_alignment: bool = False
 
     @classmethod
     def from_config(cls, config) -> "DawidSkeneSettings":
@@ -73,6 +86,7 @@ class DawidSkeneSettings:
             permutation_min_majority_agreement=(
                 config.dawid_skene_permutation_min_majority_agreement
             ),
+            class_alignment=config.dawid_skene_class_alignment,
         )
 
 
@@ -102,6 +116,17 @@ class DawidSkeneFit:
     max_posterior_mean: float
     # Row order of ``confusion``; restricted along with it, and empty unless the fit reached EM.
     eligible_senders: tuple[str, ...] = ()
+    # EM finished with finite parameters and a normalized posterior. Weaker than ``ok``: it says
+    # the numbers are usable, not that the fit passed the hybrid arm's gates.
+    numerically_valid: bool = False
+    # The decision this fit would broadcast, populated whenever ``numerically_valid``. Identical
+    # to ``labels``/``valid_mask`` when the status is ``ok``.
+    candidate_labels: np.ndarray | None = field(default=None, repr=False)
+    candidate_valid_mask: np.ndarray | None = field(default=None, repr=False)
+    # ``alignment_permutation[c]`` is the output class latent class ``c`` was mapped onto; empty
+    # when alignment is off. ``alignment_score`` is the total confusion mass the mapping captured.
+    alignment_permutation: tuple[int, ...] = ()
+    alignment_score: float = 0.0
     confusion: np.ndarray | None = field(default=None, repr=False)
     prior: np.ndarray | None = field(default=None, repr=False)
     posterior: np.ndarray | None = field(default=None, repr=False)
@@ -152,6 +177,41 @@ def _diagonal_fraction(posterior, slices, onehots, num_classes: int, pseudocount
         hits += int((modal[supported] == np.nonzero(supported)[0]).sum())
         total += int(supported.sum())
     return float(hits / total) if total else 0.0
+
+
+def _align_classes(
+    posterior: np.ndarray, prior: np.ndarray, confusion: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[int, ...], float]:
+    """Permute the latent classes onto the label space the clients actually emit.
+
+    The likelihood is invariant to relabelling the hidden classes, so EM can converge to a fit in
+    which latent class 0 means ``gafgyt.udp``. The hybrid arm catches that with a majority-anchored
+    agreement gate, but the Dawid-Skene-only arm has no majority path by construction, so the
+    permutation has to be resolved inside the estimator instead of accepted or rejected outside it
+    (DENEY_1_SCENARIO_3_DENEY_PLANI.md section 5).
+
+    Score: the total confusion mass a mapping captures, ``sum_j Theta_j[c, k]`` for latent ``c``
+    mapped to output ``k``. That reads only the fitted confusions -- no majority labels and no
+    ground truth -- and the maximizing assignment is exact via Hungarian rather than greedy, which
+    for 11 classes can differ. ``linear_sum_assignment`` is deterministic on identical input; the
+    scores are float64 sums over 89 clients, so exact ties are not something to design around.
+    """
+    score = confusion.sum(axis=0)
+    rows, permutation = linear_sum_assignment(-score)
+    aligned_posterior = np.empty_like(posterior)
+    aligned_posterior[:, permutation] = posterior
+    aligned_prior = np.empty_like(prior)
+    aligned_prior[permutation] = prior
+    # Confusion rows are latent classes and get permuted; columns are emitted labels and do not.
+    aligned_confusion = np.empty_like(confusion)
+    aligned_confusion[:, permutation, :] = confusion
+    return (
+        aligned_posterior,
+        aligned_prior,
+        aligned_confusion,
+        tuple(int(k) for k in permutation),
+        float(score[rows, permutation].sum()),
+    )
 
 
 def build_annotation_matrix(
@@ -307,16 +367,12 @@ def fit_dawid_skene(
                 break
         previous_objective = objective
 
-    if not converged:
-        return _failed(
-            "not_converged",
-            num_open,
-            iterations=iterations,
-            stop_reason=stop_reason,
-            log_likelihood=log_likelihood,
-            objective=objective,
-            eligible_clients=num_eligible,
-            excluded_clients=excluded,
+    # --- Class alignment ----------------------------------------------------------------------
+    alignment_permutation: tuple[int, ...] = ()
+    alignment_score = 0.0
+    if settings.class_alignment:
+        posterior, prior, confusion, alignment_permutation, alignment_score = _align_classes(
+            posterior, prior, confusion
         )
 
     # --- Decision -----------------------------------------------------------------------------
@@ -340,6 +396,8 @@ def fit_dawid_skene(
     #     with tampering, and on scenario 1 even sealed ground truth only scores ~0.14-0.25.
     #   chance floor       -- backstop for a fit with no coherent class-to-label mapping at all,
     #     checked first because the ratio degrades in step with the fit when both collapse.
+    # All three are majority-anchored or majority-scored, so all three are hybrid-arm policy. They
+    # set the status; whether the status blocks a broadcast is the caller's decision.
     diagonal_fraction = _diagonal_fraction(
         posterior, slices, onehots, num_classes, settings.confusion_pseudocount
     )
@@ -359,7 +417,7 @@ def fit_dawid_skene(
     )
     diagnostics = dict(
         iterations=iterations,
-        converged=True,
+        converged=converged,
         stop_reason=stop_reason,
         log_likelihood=log_likelihood,
         objective=objective,
@@ -370,7 +428,20 @@ def fit_dawid_skene(
         reference_diagonal_fraction=reference_diagonal_fraction,
         majority_agreement=majority_agreement,
         max_posterior_mean=float(max_posterior[valid_mask].mean()) if valid_mask.any() else 0.0,
+        alignment_permutation=alignment_permutation,
+        alignment_score=alignment_score,
+        # EM ran to a finite, normalized end. Every check from here down is policy, not arithmetic,
+        # so the candidate travels with the rejection and a caller with no majority path can use it.
+        numerically_valid=True,
+        candidate_labels=labels,
+        candidate_valid_mask=valid_mask,
+        confusion=confusion,
+        prior=prior,
+        posterior=posterior,
     )
+
+    if not converged:
+        return _failed("not_converged", num_open, **diagnostics)
     # Chance backstop, checked first: a permuted fit lands near 1/num_classes, and if the majority
     # reference is itself degenerate the ratio test below would otherwise admit anything.
     if diagonal_fraction <= 1.0 / num_classes:
@@ -387,8 +458,5 @@ def fit_dawid_skene(
         status="ok",
         labels=labels,
         valid_mask=valid_mask,
-        confusion=confusion,
-        prior=prior,
-        posterior=posterior,
         **diagnostics,
     )

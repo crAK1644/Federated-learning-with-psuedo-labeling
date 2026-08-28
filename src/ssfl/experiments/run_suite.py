@@ -68,6 +68,29 @@ def _dataset_manifest_hash(config: ExperimentConfig) -> str | None:
     return json.loads(manifest_path.read_text()).get("manifest_hash")
 
 
+def verify_dataset_manifest(
+    matrix_path: Path, entries: list[tuple[str, ExperimentConfig]]
+) -> None:
+    """Enforce a matrix-level ``dataset_manifest_hash`` before the first run starts.
+
+    A multi-arm comparison is only a comparison if every arm saw the same partition. Nothing else
+    catches a silently re-prepared ``artifacts/data/`` -- the run id would change, the runs would
+    all succeed, and the arms would simply not be comparable. Matrices without the key are
+    unaffected.
+    """
+    expected = load_yaml(matrix_path).get("dataset_manifest_hash")
+    if not expected:
+        return
+    for name, config in entries:
+        actual = _dataset_manifest_hash(config)
+        if actual != expected:
+            raise SystemExit(
+                f"[run_suite] ABORT {name}: {config.data_path}/dataset_manifest.json has "
+                f"manifest_hash {actual!r}, but {matrix_path.name} requires {expected!r}. "
+                "Re-prepare the data with the matrix's seed, or fix the matrix."
+            )
+
+
 def _run_dir(config: ExperimentConfig) -> Path:
     run_id = compute_run_id(config, dataset_manifest_hash=_dataset_manifest_hash(config))
     return config.output_path / run_id
@@ -115,7 +138,10 @@ def run_suite(
     results: list[dict[str, Any]] = []
     failed = 0
 
-    for name, config in build_matrix_configs(matrix_path, configs_dir=configs_dir):
+    entries = build_matrix_configs(matrix_path, configs_dir=configs_dir)
+    verify_dataset_manifest(matrix_path, entries)
+
+    for name, config in entries:
         run_dir = _run_dir(config)
         summary_path = run_dir / "summary.json"
         if resume and summary_path.exists():

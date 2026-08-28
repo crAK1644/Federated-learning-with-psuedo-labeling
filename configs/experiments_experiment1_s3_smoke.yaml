@@ -1,0 +1,28 @@
+# Two-round smoke for all three experiment-1 arms, in the order the full matrix runs them.
+#
+# Operational gate only. It must pass on the same commit the full matrix will run on, and nothing
+# it shows may be used to retune a Dawid-Skene setting (DENEY_1_SCENARIO_3_DENEY_PLANI.md
+# section 11). What to check afterwards, per run directory:
+#
+#   num_proposals == 89 and rejected_count == 0 on every round
+#   ds_applied == 1 on every round of the DS-only arm, and ds_status is never a numerical failure
+#   ds_valid_mask_match == 1 on both Dawid-Skene arms
+#   the hybrid arm's ds_status is recorded whichever way the round went
+#   aggregation_audit/ contains annotations and dawid_skene_confusion for every round
+#   the per-round wall clock, to size the 600-round budget
+# The smoke gate has to see the same partition the full matrix will, or it is not a gate.
+dataset_manifest_hash: 54023e3de197d9dc16f50a89425d5c44bb594486210aacf16ecaa8cccc86ba65
+
+# Round count and checkpoint schedule are the ONLY overrides. Everything an arm is defined by --
+# aggregation mode, estimator settings, gates, seed, partition -- comes from the same three
+# profiles the full matrix runs, so a gate that passes here is a gate on the real configuration.
+entries:
+  - name: experiment1_s3_mv_smoke
+    base_profile: experiment1_s3_mv
+    overrides: {num_server_rounds: 2, checkpoint_rounds: [1, 2]}
+  - name: experiment1_s3_ds_only_smoke
+    base_profile: experiment1_s3_ds_only
+    overrides: {num_server_rounds: 2, checkpoint_rounds: [1, 2]}
+  - name: experiment1_s3_hybrid_smoke
+    base_profile: experiment1_s3_hybrid
+    overrides: {num_server_rounds: 2, checkpoint_rounds: [1, 2]}

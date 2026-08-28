@@ -1,0 +1,57 @@
+# Experiment 1, arm 1 of 3: majority vote only, scenario 3, 200 rounds.
+#
+# The control. Every open-set sample's global label is the deterministic majority of the clients'
+# pseudo-labels, ties to the lowest class index, exactly as in every majority run before this one.
+# No Dawid-Skene fit runs on the online path and no Dawid-Skene result touches a training decision.
+#
+# The annotation dumps below are what make this arm more than a baseline: with the raw 89 x 8900
+# client label matrix recorded every round, the Dawid-Skene aggregation can be replayed offline on
+# this arm's own annotations, which is a counterfactual the two live Dawid-Skene arms cannot give.
+profile: experiment1_s3_mv
+run_kind: extension
+algorithm: ssfl
+backbone: cnn
+scenario: 3
+seed: 2023
+
+data_path: artifacts/data
+output_path: artifacts/runs
+
+num_server_rounds: 200
+local_epochs: 5
+batch_size: 80
+paper_text_batch: false
+learning_rate: 1.0e-4
+# cuda, not auto: auto silently falls back to CPU, which looks like a slow run rather than a
+# misconfigured one. A missing GPU must fail the run, not quietly change the arm.
+device: cuda
+deterministic: true
+
+ssfl_threshold_policy: median
+ssfl_discriminator_mode: enabled
+ssfl_voting_mode: enabled
+ssfl_label_representation: hard
+ssfl_soft_label_round_decimals: null
+
+# --- aggregation -------------------------------------------------------------------------------
+ssfl_hard_aggregation: majority
+# Restricted diagnostic (DATA_CARD.md section 10 of the experiment plan): the raw 89 x 8900 client
+# label matrix, pseudonymized by sender index. Every round, because the reliability figures and the
+# offline pseudo-label scoring are both recomputed from it. Delete or restrict once the figures are
+# built; it does not ship with the paper artifact.
+dawid_skene_save_annotations: true
+dawid_skene_annotation_rounds: []
+
+dsfl_temperature: 0.1
+
+# Interval 1 because resume is not wired into server_app yet (REPRODUCIBILITY.md #27): an
+# interrupted run restarts from round 1, so the checkpoints are the only record of a partial run.
+checkpoint_interval: 1
+checkpoint_rounds: [10, 50, 100, 150, 200]
+logging_interval: 1
+log_every_batch: false
+
+client_num_cpus: 1.0
+# 8 concurrent clients x 0.125 = one full GPU, the setting the plan fixes for all three arms.
+client_num_gpus: 0.125
+max_concurrent_clients: 8

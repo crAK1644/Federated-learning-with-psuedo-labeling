@@ -51,6 +51,7 @@ DS_STATUS_CODES = {
     "permutation_check_agreement": 13,
     "estimator_error": 14,
     "permutation_check_chance": 15,
+    "not_converged_but_used": 16,
 }
 
 
@@ -72,6 +73,7 @@ class SSFLStrategy(Strategy):
         dawid_skene_warmup_rounds: int = 0,
         save_annotations: bool = False,
         annotation_rounds: tuple[int, ...] = (),
+        require_matching_valid_mask: bool = False,
     ) -> None:
         self.scenario = scenario
         self.dataset_manifest_hash = dataset_manifest_hash
@@ -84,6 +86,7 @@ class SSFLStrategy(Strategy):
         self.dawid_skene_warmup_rounds = dawid_skene_warmup_rounds
         self.save_annotations = save_annotations
         self.annotation_rounds = annotation_rounds
+        self.require_matching_valid_mask = require_matching_valid_mask
         self.last_dawid_skene_metrics: dict[str, float] = {}
         self._current_node_ids: list[int] = []
 
@@ -173,9 +176,46 @@ class SSFLStrategy(Strategy):
             server_round, proposals, result
         )
         broadcast_labels, broadcast_mask = result.global_labels, result.valid_mask
+        ds_broadcast = False
         if self.hard_aggregation == HardAggregation.dawid_skene and ds_fit is not None:
             if ds_fit.ok:
                 broadcast_labels, broadcast_mask = ds_fit.labels, ds_fit.valid_mask
+                ds_broadcast = True
+        elif self.hard_aggregation == HardAggregation.dawid_skene_only:
+            # No majority path exists in this arm. A fit that merely failed a majority-anchored
+            # gate is still broadcast; a fit that is numerically broken, or absent because the
+            # estimator raised, stops the run. Falling back here would silently turn this arm into
+            # the hybrid arm and make the three-way comparison meaningless.
+            if ds_fit is None or not ds_fit.numerically_valid:
+                raise RuntimeError(
+                    f"round {server_round}: ssfl_hard_aggregation=dawid_skene_only and the "
+                    f"Dawid-Skene fit produced no usable posterior (reason={ds_reason!r}). This "
+                    "arm has no majority fallback by design: fix the estimator and rerun all "
+                    "three arms on the same code version."
+                )
+            broadcast_labels = ds_fit.candidate_labels
+            broadcast_mask = ds_fit.candidate_valid_mask
+            ds_broadcast = True
+            if ds_fit.status == "not_converged":
+                # Reported distinctly from the hybrid arm's `not_converged`, which is a fallback.
+                ds_reason = "not_converged_but_used"
+        if (
+            self.require_matching_valid_mask
+            and ds_fit is not None
+            and ds_fit.candidate_valid_mask is not None
+        ):
+            # The arms are only comparable while they label the same open-set items. A single
+            # differing bit means they are being scored on different sample sets, so stop.
+            if not np.array_equal(ds_fit.candidate_valid_mask, result.valid_mask):
+                differing = int(
+                    np.count_nonzero(ds_fit.candidate_valid_mask != result.valid_mask)
+                )
+                raise RuntimeError(
+                    f"round {server_round}: Dawid-Skene and majority valid masks differ on "
+                    f"{differing} of {self.num_open} open-set items, so the arms would be "
+                    "compared on different sample sets. Check "
+                    "dawid_skene_min_item_annotations and dawid_skene_posterior_threshold."
+                )
         if self.audit_dir is not None:
             self.audit_dir.mkdir(parents=True, exist_ok=True)
             audit_path = self.audit_dir / f"ssfl_aggregation_round_{server_round}.npz"
@@ -189,9 +229,22 @@ class SSFLStrategy(Strategy):
             if ds_fit is not None:
                 payload["majority_labels"] = result.global_labels.astype(np.int8)
                 payload["majority_valid_mask"] = result.valid_mask
-                payload["dawid_skene_labels"] = ds_fit.labels.astype(np.int8)
-                payload["dawid_skene_valid_mask"] = ds_fit.valid_mask
-                payload["dawid_skene_status"] = np.array(ds_fit.status)
+                # The candidate, not the accepted fit: a rejected round still has to be
+                # re-scorable offline, and in dawid_skene_only mode the candidate IS what was
+                # broadcast. Falls back to `labels` only when EM produced nothing at all.
+                candidate_labels = (
+                    ds_fit.candidate_labels if ds_fit.numerically_valid else ds_fit.labels
+                )
+                candidate_mask = (
+                    ds_fit.candidate_valid_mask if ds_fit.numerically_valid else ds_fit.valid_mask
+                )
+                payload["dawid_skene_labels"] = candidate_labels.astype(np.int8)
+                payload["dawid_skene_valid_mask"] = candidate_mask
+                payload["dawid_skene_status"] = np.array(ds_reason)
+                if ds_fit.alignment_permutation:
+                    payload["dawid_skene_alignment"] = np.array(
+                        ds_fit.alignment_permutation, dtype=np.int64
+                    )
             if annotations is not None and self._save_annotations_this_round(server_round):
                 # Restricted diagnostic (DATA_CARD.md / the approval brief): raw client-by-sample
                 # labels are off by default and this audit is deleted once settings are locked.
@@ -213,7 +266,7 @@ class SSFLStrategy(Strategy):
         # Stashed so server_app can put the ds_* diagnostics in metrics.parquet next to accuracy:
         # aggregate_train's return value never reaches the evaluate callback.
         ds_metrics = self._dawid_skene_metrics(
-            ds_fit, ds_seconds, ds_reason, result, annotations
+            ds_fit, ds_seconds, ds_reason, result, annotations, ds_broadcast
         )
         self.last_dawid_skene_metrics = ds_metrics
         arrays_out = array_record_from_numpy(
@@ -254,10 +307,20 @@ class SSFLStrategy(Strategy):
         ``(annotations, fit, seconds, reason)``; ``fit`` is None when no fit was attempted and
         ``reason`` then names why.
         """
-        if self.hard_aggregation == HardAggregation.majority:
-            return None, None, 0.0, "not_attempted"
         if self.voting_mode != VotingMode.enabled:
             return None, None, 0.0, "not_attempted"
+        if self.hard_aggregation == HardAggregation.majority:
+            # No fit, but the matrix itself is still worth keeping when annotations are being
+            # dumped: it is what makes a counterfactual Dawid-Skene analysis of the majority arm
+            # possible after the fact (DENEY_1_SCENARIO_3_DENEY_PLANI.md section 10).
+            if not self._save_annotations_this_round(server_round):
+                return None, None, 0.0, "not_attempted"
+            annotations, _ = build_annotation_matrix(
+                [(envelope.sender_id, result.pseudo_labels) for envelope, result in proposals],
+                num_open=self.num_open,
+                num_classes=NUM_CLASSES,
+            )
+            return annotations, None, 0.0, "not_attempted"
         annotations, senders = build_annotation_matrix(
             [(envelope.sender_id, result.pseudo_labels) for envelope, result in proposals],
             num_open=self.num_open,
@@ -290,11 +353,13 @@ class SSFLStrategy(Strategy):
         reason: str,
         majority,
         annotations: np.ndarray | None = None,
+        ds_broadcast: bool = False,
     ) -> dict[str, float | int]:
         """Round diagnostics for metrics.parquet. Every key here is defined in
         DAWID_SKENE_GLOSSARY.md, and tests/unit/test_dawid_skene_glossary.py fails if a key is
         added, renamed or dropped without that file following. Note ``ds_applied`` answers what
-        clients received, not whether the fit succeeded -- a clean fit in shadow mode reports 0.
+        clients received, not whether the fit succeeded -- a clean fit in shadow mode reports 0,
+        and a fit that failed a majority-anchored gate reports 1 in ``dawid_skene_only`` mode.
         """
         if self.hard_aggregation == HardAggregation.majority:
             return {}
@@ -306,15 +371,31 @@ class SSFLStrategy(Strategy):
                 "ds_seconds": float(seconds),
                 **coverage,
             }
-        comparable = fit.valid_mask & majority.valid_mask
+        # The candidate, not the accepted fit: in dawid_skene_only a non-converged fit is still
+        # what clients get, and `fit.valid_mask`/`fit.labels` stay empty on every non-ok path, so
+        # reading those would report 0.0 coverage and 0.0 disagreement for the one arm whose
+        # labels these describe.
+        candidate_mask = (
+            fit.candidate_valid_mask if fit.candidate_valid_mask is not None else fit.valid_mask
+        )
+        candidate_labels = fit.candidate_labels if fit.candidate_labels is not None else fit.labels
+        comparable = candidate_mask & majority.valid_mask
         disagreement = (
-            float((fit.labels[comparable] != majority.global_labels[comparable]).mean())
+            float((candidate_labels[comparable] != majority.global_labels[comparable]).mean())
             if comparable.any()
             else 0.0
         )
+        identity = tuple(range(len(fit.alignment_permutation)))
         return {
-            "ds_status": DS_STATUS_CODES.get(fit.status, DS_STATUS_CODES["estimator_error"]),
-            "ds_applied": int(fit.ok and self.hard_aggregation == HardAggregation.dawid_skene),
+            # `reason`, not `fit.status`: dawid_skene_only rewrites a used non-converged fit to
+            # `not_converged_but_used`, and the code has to say which of the two happened.
+            "ds_status": DS_STATUS_CODES.get(reason, DS_STATUS_CODES["estimator_error"]),
+            "ds_applied": int(ds_broadcast),
+            "ds_alignment_score": float(fit.alignment_score),
+            "ds_alignment_identity": int(
+                bool(fit.alignment_permutation) and fit.alignment_permutation == identity
+            ),
+            "ds_valid_mask_match": int(np.array_equal(candidate_mask, majority.valid_mask)),
             "ds_seconds": float(seconds),
             "ds_iterations": fit.iterations,
             "ds_converged": int(fit.converged),
@@ -331,7 +412,7 @@ class SSFLStrategy(Strategy):
             "ds_majority_agreement": fit.majority_agreement,
             "ds_max_posterior_mean": fit.max_posterior_mean,
             "ds_disagreement_rate": disagreement,
-            "ds_valid_rate": float(fit.valid_mask.mean()),
+            "ds_valid_rate": float(candidate_mask.mean()),
             **coverage,
         }
 

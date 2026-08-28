@@ -24,7 +24,8 @@ likely way to misread a run.
 | Term | Metric key | Definition |
 | --- | --- | --- |
 | Fit status | `ds_status` | Integer code for the **first** failure the round hit, or 0 for `ok`. The codes are mutually exclusive by construction, so per-status round counts sum to the number of attempted rounds. Codes are listed below. |
-| Applied | `ds_applied` | 1 only when the fit passed every gate **and** the run is in active mode (`hard_aggregation=dawid_skene`). In shadow mode a flawless fit still reports 0, because nothing was broadcast. `ds_applied` and `ds_status == ok` are different questions: the first is about what clients received, the second about what the estimator concluded. |
+| Applied | `ds_applied` | 1 when the Dawid-Skene labels were the ones broadcast. In the hybrid mode (`hard_aggregation=dawid_skene`) that requires passing every gate; in `dawid_skene_only` it requires only that EM produced a finite, normalized posterior. In shadow mode a flawless fit still reports 0, because nothing was broadcast. `ds_applied` and `ds_status == ok` are different questions: the first is about what clients received, the second about what the estimator concluded. |
+| Numerically valid | — | EM finished with finite parameters and a normalized posterior. Weaker than `ok`: a fit can be numerically valid and still fail non-convergence or a permutation gate. This is the line the estimator draws; everything on the far side of it is caller policy. A fit that is not numerically valid exposes no candidate labels at all, and in `dawid_skene_only` mode stops the run. |
 | Fallback | — | Round-level: this round's Dawid-Skene result is discarded and deterministic majority vote is broadcast instead. There is no per-client fallback and no partial fallback — a round either broadcasts the Dawid-Skene labels or the majority labels, never a mixture. A round is a fallback round when Dawid-Skene was attempted in active mode and `ds_applied` is 0. |
 | Warm-up | `ds_status` = 2 | Rounds before `dawid_skene_warmup_rounds`, where no fit is attempted at all. These are not failures, and lumping them into a fallback rate overstates it. |
 | Client weighting | — | **Proposed, not implemented.** Every eligible client's labels influence the aggregate class-conditionally through its learned confusion matrix, instead of the current binary include/exclude plus one equal vote each. Options A/B/C in `DAWID_SKENE_SONRAKI_ADIMLAR.md` are three ways to do this. Nothing in the code today weights clients: the active path is either unweighted majority or the unweighted Dawid-Skene argmax. Note this concerns pseudo-label aggregation only — no protocol here weights model updates, which is clarification question 1. |
@@ -49,16 +50,17 @@ likely way to misread a run.
 | 13 | `permutation_check_agreement` | Agreement with majority below the floor. |
 | 14 | `estimator_error` | The estimator raised; the round falls back rather than stopping the run. |
 | 15 | `permutation_check_chance` | No coherent class-to-label mapping at all. |
+| 16 | `not_converged_but_used` | `dawid_skene_only` mode only: EM hit the iteration cap, the last posterior was finite and normalized, and it was broadcast anyway. The hybrid arm records the same situation as `not_converged` and falls back; the two codes are how a round tells you which policy was in force. |
 
 ## Quantities that sound alike
 
 | Term | Metric key | Definition |
 | --- | --- | --- |
 | Broadcast valid rate | `valid_rate` | Fraction of open-set items actually broadcast this round, by whichever aggregator won the round. |
-| Fit valid rate | `ds_valid_rate` | Fraction the Dawid-Skene fit itself considered usable. Reported even when the fit was not applied, which is the point: it is comparable across shadow and active runs. |
+| Fit valid rate | `ds_valid_rate` | Fraction of open samples the Dawid-Skene *candidate* considered usable. Reported even when the candidate was not applied, which is the point: it is comparable across shadow, hybrid and `dawid_skene_only` runs. Read from the candidate rather than the accepted fit so a rejected or non-converged fit still reports its real coverage. |
 | Diagonal fraction | `ds_diagonal_fraction`, `ds_reference_diagonal_fraction` | Coherence of the fitted latent classes against the emitted label space. Meaningful **only** as a ratio against `ds_reference_diagonal_fraction`, majority's score on the same annotations. It cannot detect a global relabelling and has no useful absolute floor — on scenario 1 even sealed ground truth scores about 0.14 to 0.25. |
 | Majority agreement | `ds_majority_agreement` | Fraction of items valid in both fits where Dawid-Skene and majority chose the same class. This is the actual permutation detector: it is the only gate statistic anchored outside the fit. |
-| Disagreement rate | `ds_disagreement_rate` | `1 - ds_majority_agreement`, over the same mask. It is computed in the strategy rather than the estimator and kept for continuity of existing runs; do not read the two as independent evidence. |
+| Disagreement rate | `ds_disagreement_rate` | `1 - ds_majority_agreement`, over the same mask, computed from the Dawid-Skene candidate against majority. It is computed in the strategy rather than the estimator and kept for continuity of existing runs; do not read the two as independent evidence. |
 | Annotation coverage | `ds_coverage_min`, `ds_coverage_mean`, `ds_coverage_max` | Fraction of the open set each client actually labelled, summarised across clients. Counted over every client in the annotation matrix, including ones later excluded, and reported during warm-up rounds too. Not the same axis as `participating_*`, which counts clients per item rather than items per client. |
 | Vote margin | `vote_margin_mean`, `vote_margin_min` | Top-class votes minus runner-up votes, over items majority considered valid. A margin of 0 is a tie. |
 | Tie count | `tie_count` | Items where the top vote count was shared. The current rule resolves these by lowest class index, which stage 3 measured at chance with a 0.17 to 0.79 spread across relabellings — see `TIE_BREAK_PLAN.md`. |
@@ -68,6 +70,8 @@ likely way to misread a run.
 | Fit objective | `ds_log_likelihood`, `ds_objective` | Unregularised log-likelihood and the MAP objective EM actually maximises. Reported as 0.0 rather than NaN on failure paths; `ds_status` says whether they mean anything. |
 | Posterior confidence | `ds_max_posterior_mean` | Mean over items of the largest posterior entry. Not a calibrated probability of being correct, and not to be reported as "confidence" without that caveat. |
 | Class counts | `global_class_<i>_count` | Broadcast label counts per class, one key per class. |
+| Class alignment | `ds_alignment_score`, `ds_alignment_identity` | The deterministic latent-class-to-label permutation fitted after EM, scored as the total confusion mass it captures (`sum_j Theta_j[c, pi(c)]`). `ds_alignment_identity` is 1 when the permutation left every class where it was. Both are 0 when `dawid_skene_class_alignment` is off. Scored on the fitted confusions only -- not on majority, not on ground truth. |
+| Valid-mask match | `ds_valid_mask_match` | 1 when the Dawid-Skene candidate mask and the majority mask agree bit for bit, so the two aggregators were scored on the same open-set items. With `dawid_skene_require_matching_valid_mask` set, a 0 here cannot appear in a finished run: it stops the round instead. |
 
 ## Words to avoid
 

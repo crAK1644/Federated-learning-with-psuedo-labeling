@@ -1,0 +1,31 @@
+# Experiment 1: majority vs Dawid-Skene-only vs hybrid on scenario 3, seed 2023, 200 rounds each.
+#
+# The research question is whether combining client pseudo-labels with Dawid-Skene produces a
+# better global model than majority vote under identical federated conditions. Aggregation is the
+# only thing that differs between the three entries; each arm carries its settings in its own
+# profile rather than as an override here, because the two Dawid-Skene arms differ in more than one
+# key and an override list that long stops being readable as "one thing changed".
+#
+# ORDER. Majority first: it is the reference the other two are read against and the only entry
+# interpretable standing alone. Then DS-only, then hybrid. Sequential, never parallel -- eight
+# concurrent clients at 0.125 GPU each already saturate the card, so overlapping arms only halves
+# each one's throughput.
+#
+# BUDGET. 3 x 200 = 600 communication rounds. At the ~144 s/round measured on this hardware at
+# these settings that is roughly 8 h per arm and 24 h end to end.
+#
+# BEFORE STARTING. The code and configs freeze here. If either changes after an arm has run, that
+# arm's result is not comparable to the others and all three rerun -- see section 3 of
+# DENEY_1_SCENARIO_3_DENEY_PLANI.md. Confirm first that the two-round smoke matrix
+# (configs/experiments_experiment1_s3_smoke.yaml) passed on this same commit, and that
+# artifacts/data/dataset_manifest.json still hashes to the value below -- run_suite refuses to
+# start any entry if it does not.
+dataset_manifest_hash: 54023e3de197d9dc16f50a89425d5c44bb594486210aacf16ecaa8cccc86ba65
+
+entries:
+  - name: experiment1_s3_mv_200
+    base_profile: experiment1_s3_mv
+  - name: experiment1_s3_ds_only_200
+    base_profile: experiment1_s3_ds_only
+  - name: experiment1_s3_hybrid_200
+    base_profile: experiment1_s3_hybrid

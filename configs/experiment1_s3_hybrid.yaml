@@ -1,0 +1,84 @@
+# Experiment 1, arm 3 of 3: hybrid, scenario 3, 200 rounds.
+#
+# Dawid-Skene when the fit passes every gate, majority when it does not. The fallback is
+# round-level and total: a fallback round rejects that round's entire Dawid-Skene result, never an
+# individual client. Clients are never dropped for being unreliable -- every eligible client is
+# weighted through its own confusion matrix.
+#
+# Identical Dawid-Skene settings to the DS-only arm, including the 500-iteration cap and the class
+# alignment, so the two arms differ in fallback policy and nothing else. That is the whole point of
+# the pair: if the settings differed, a hybrid-vs-DS-only gap would not be attributable to policy.
+profile: experiment1_s3_hybrid
+run_kind: extension
+algorithm: ssfl
+backbone: cnn
+scenario: 3
+seed: 2023
+
+data_path: artifacts/data
+output_path: artifacts/runs
+
+num_server_rounds: 200
+local_epochs: 5
+batch_size: 80
+paper_text_batch: false
+learning_rate: 1.0e-4
+# cuda, not auto: auto silently falls back to CPU, which looks like a slow run rather than a
+# misconfigured one. A missing GPU must fail the run, not quietly change the arm.
+device: cuda
+deterministic: true
+
+ssfl_threshold_policy: median
+ssfl_discriminator_mode: enabled
+ssfl_voting_mode: enabled
+ssfl_label_representation: hard
+ssfl_soft_label_round_decimals: null
+
+# --- aggregation -------------------------------------------------------------------------------
+ssfl_hard_aggregation: dawid_skene
+dawid_skene_warmup_rounds: 0
+# 500, not the 100 used in the scenario-1 trials, and the same number in both Dawid-Skene arms:
+# with a shared cap the arms differ in fallback policy rather than in the estimator itself.
+dawid_skene_max_iterations: 500
+dawid_skene_min_iterations: 2
+dawid_skene_tolerance: 1.0e-6
+dawid_skene_initialization_pseudocount: 0.01
+dawid_skene_confusion_pseudocount: 0.1
+dawid_skene_class_prior_pseudocount: 1.0
+# min_item_annotations 1 and posterior_threshold 0.0 make the Dawid-Skene valid mask "at least one
+# client labelled this item", which is majority's rule too. require_matching_valid_mask then holds
+# the two to it bit for bit: if they ever diverge the arms are being scored on different sample
+# sets, and the run stops rather than producing a comparison that looks fine in a table.
+dawid_skene_min_item_annotations: 1
+dawid_skene_min_client_annotations: 1
+dawid_skene_min_clients: 3
+dawid_skene_posterior_threshold: 0.0
+dawid_skene_require_matching_valid_mask: true
+dawid_skene_damping: 1.0
+dawid_skene_epsilon: 1.0e-12
+dawid_skene_warm_start: false
+# Hybrid's gates. In the DS-only arm these still set `ds_status` for the record but reject nothing,
+# because that arm has no majority path to reject onto.
+dawid_skene_permutation_min_diagonal_ratio: 0.7
+dawid_skene_permutation_min_majority_agreement: 0.5
+dawid_skene_class_alignment: true
+# Restricted diagnostic (DATA_CARD.md section 10 of the experiment plan): the raw 89 x 8900 client
+# label matrix, pseudonymized by sender index. Every round, because the reliability figures and the
+# offline pseudo-label scoring are both recomputed from it. Delete or restrict once the figures are
+# built; it does not ship with the paper artifact.
+dawid_skene_save_annotations: true
+dawid_skene_annotation_rounds: []
+
+dsfl_temperature: 0.1
+
+# Interval 1 because resume is not wired into server_app yet (REPRODUCIBILITY.md #27): an
+# interrupted run restarts from round 1, so the checkpoints are the only record of a partial run.
+checkpoint_interval: 1
+checkpoint_rounds: [10, 50, 100, 150, 200]
+logging_interval: 1
+log_every_batch: false
+
+client_num_cpus: 1.0
+# 8 concurrent clients x 0.125 = one full GPU, the setting the plan fixes for all three arms.
+client_num_gpus: 0.125
+max_concurrent_clients: 8

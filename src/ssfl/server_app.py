@@ -178,6 +178,7 @@ def main(grid: Grid, context: Context) -> None:
             dawid_skene_warmup_rounds=exp_config.dawid_skene_warmup_rounds,
             save_annotations=exp_config.dawid_skene_save_annotations,
             annotation_rounds=exp_config.dawid_skene_annotation_rounds,
+            require_matching_valid_mask=exp_config.dawid_skene_require_matching_valid_mask,
         )
         initial_arrays = ArrayRecord()
         seed_everything(exp_config.seed)

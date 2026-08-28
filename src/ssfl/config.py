@@ -94,11 +94,18 @@ class HardAggregation(str, Enum):
 
     ``dawid_skene_shadow`` fits the estimator and records its diagnostics but broadcasts the
     majority labels, so it is a control arm: it must change no broadcast byte and consume no RNG.
+
+    ``dawid_skene`` is the hybrid policy: Dawid-Skene when every gate passes, majority otherwise.
+    ``dawid_skene_only`` shares the identical estimator but has no majority path at all -- a fit
+    that fails a majority-anchored gate is still broadcast, and a fit that is numerically broken
+    stops the run instead of falling back. The two modes differ in policy only, which is what makes
+    them a controlled pair (DENEY_1_SCENARIO_3_DENEY_PLANI.md section 4).
     """
 
     majority = "majority"
     dawid_skene_shadow = "dawid_skene_shadow"
     dawid_skene = "dawid_skene"
+    dawid_skene_only = "dawid_skene_only"
 
 
 class DeviceKind(str, Enum):
@@ -247,6 +254,14 @@ class ExperimentConfig(BaseModel):
     dawid_skene_permutation_min_majority_agreement: float = 0.5
     dawid_skene_save_annotations: bool = False
     dawid_skene_annotation_rounds: tuple[int, ...] = ()
+    # Deterministic latent-class-to-label permutation after EM, scored on the fitted confusions
+    # alone (never on majority and never on ground truth). Off by default so runs made before
+    # experiment 1 stay reproducible; the experiment's three arms all switch it on.
+    dawid_skene_class_alignment: bool = False
+    # Stop the run if the Dawid-Skene and majority valid masks ever differ by a single bit. The
+    # arms are only comparable while they label the same open-set items, so a divergence is a
+    # failed experiment, not a metric to plot afterwards.
+    dawid_skene_require_matching_valid_mask: bool = False
 
     # --- DS-FL-specific ------------------------------------------------
     dsfl_temperature: float = 0.1
@@ -349,6 +364,20 @@ class ExperimentConfig(BaseModel):
         ):
             if value < 0:
                 raise ValueError("dawid_skene pseudocounts must be >= 0")
+        if self.ssfl_hard_aggregation == HardAggregation.dawid_skene_only:
+            if not self.dawid_skene_class_alignment:
+                raise ValueError(
+                    "ssfl_hard_aggregation=dawid_skene_only requires "
+                    "dawid_skene_class_alignment=true: with no majority-anchored accept/reject "
+                    "check left, alignment is the only thing tying latent class c to output "
+                    "class c"
+                )
+            if self.dawid_skene_warmup_rounds != 0:
+                raise ValueError(
+                    "ssfl_hard_aggregation=dawid_skene_only requires "
+                    "dawid_skene_warmup_rounds=0: a warm-up round has no fit to broadcast and no "
+                    "majority fallback to reach for, so it could only stop the run"
+                )
         bad_rounds = [r for r in self.dawid_skene_annotation_rounds if r < 1]
         if bad_rounds:
             raise ValueError(f"dawid_skene_annotation_rounds must be >= 1, got {bad_rounds}")

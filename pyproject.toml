@@ -13,6 +13,9 @@ dependencies = [
     "pandas>=2.2",
     "pyarrow>=15.0",
     "scikit-learn>=1.4",
+    # Hungarian assignment for the Dawid-Skene class alignment. Already present transitively via
+    # scikit-learn; named here because src/ssfl/protocols/dawid_skene.py imports it directly.
+    "scipy>=1.11",
     "matplotlib>=3.11.1",
 ]
 
