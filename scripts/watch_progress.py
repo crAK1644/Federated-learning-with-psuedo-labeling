@@ -36,6 +36,12 @@ def queued_rounds(matrix: Path) -> int:
     first refresh instead of only after the first run directory appears -- the gap between a
     50-round and a 200-round matrix is six hours of pending work.
     """
+    # An entry override wins over the base profile it overrides: the smoke matrices reuse the
+    # 200-round profiles and cut the round count to 2 in `overrides`, so reading only the base
+    # would report a two-round gate as 600 rounds of pending work.
+    override = re.search(r"num_server_rounds:\s*(\d+)", matrix.read_text())
+    if override:
+        return int(override.group(1))
     for profile in re.findall(r"^\s*base_profile:\s*(\S+)", matrix.read_text(), flags=re.MULTILINE):
         config = REPO / "configs" / f"{profile}.yaml"
         match = config.exists() and re.search(r"num_server_rounds:\s*(\d+)", config.read_text())
