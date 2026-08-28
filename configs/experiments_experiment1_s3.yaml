@@ -18,9 +18,20 @@
 # arm's result is not comparable to the others and all three rerun -- see section 3 of
 # DENEY_1_SCENARIO_3_DENEY_PLANI.md. Confirm first that the two-round smoke matrix
 # (configs/experiments_experiment1_s3_smoke.yaml) passed on this same commit, and that
-# artifacts/data/dataset_manifest.json still hashes to the value below -- run_suite refuses to
-# start any entry if it does not.
-dataset_manifest_hash: 54023e3de197d9dc16f50a89425d5c44bb594486210aacf16ecaa8cccc86ba65
+# Set this on the machine that prepares the data, BEFORE the first arm starts, and do not touch it
+# again until all three have finished. run_suite refuses to start any entry whose
+# artifacts/data/dataset_manifest.json hashes to something else, which is the only thing that
+# catches a partition re-prepared between arms -- every run would still succeed, and the three arms
+# simply would not be comparable.
+#
+# It is deliberately empty in git: manifest_hash covers the git commit and the checksums of the
+# generated allocation plots, so it is local to one machine at one commit and a value copied from
+# another checkout can never match. Fill it in with:
+#
+#   python3 -c "import json;print(json.load(open('artifacts/data/dataset_manifest.json'))['manifest_hash'])"
+#
+# Leave it empty and the check is simply skipped.
+dataset_manifest_hash:
 
 entries:
   - name: experiment1_s3_mv_200
