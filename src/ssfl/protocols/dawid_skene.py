@@ -4,11 +4,12 @@ Pure NumPy, no Flower and no torch import -- the same testability contract as th
 ``protocols/``. ``strategies/ssfl.py`` is the only production caller.
 
 Model: every open-set sample ``i`` has a hidden true class ``z_i``; every client ``j`` has a
-class-conditional confusion matrix ``M_j[c, k] = P(client j says k | truth is c)``. Clients that
-abstained on a sample contribute nothing to that sample (``ABSTAIN`` is missing data, never a
-modelled class). EM alternates a posterior E-step with a pseudocount-regularized M-step, both in
-float64; the E-step works in log space with log-sum-exp normalization because a product over ~9
-clients of probabilities near the epsilon floor underflows float64 directly.
+class-conditional confusion matrix ``M_j[c, k] = P(client j says k | truth is c)``. The default
+observation model treats ``ABSTAIN`` as missing data for backward compatibility. The experimental
+explicit mode adds it as a ``K+1``-th emitted outcome while keeping the latent truth space at K
+classes. EM alternates a posterior E-step with a pseudocount-regularized M-step, both in float64;
+the E-step works in log space with log-sum-exp normalization because a product over many clients
+of probabilities near the epsilon floor underflows float64 directly.
 
 This module is the estimator, not the policy. It reports what it found; ``strategies/ssfl.py``
 decides what to broadcast. That split is what lets the hybrid arm and the Dawid-Skene-only arm of
@@ -66,9 +67,14 @@ class DawidSkeneSettings:
     # Deterministic latent-class -> label-space permutation after EM. Scored on the fitted
     # confusion matrices alone: no majority labels, no ground truth. See ``_align_classes``.
     class_alignment: bool = False
+    # False reproduces the original missing-at-random likelihood exactly. True gives each client
+    # a K+1 output alphabet and lets its decision to abstain carry class-conditional evidence.
+    explicit_abstention: bool = False
 
     @classmethod
     def from_config(cls, config) -> "DawidSkeneSettings":
+        abstention_mode = getattr(config, "dawid_skene_abstention_mode", "missing")
+        abstention_mode = getattr(abstention_mode, "value", abstention_mode)
         return cls(
             max_iterations=config.dawid_skene_max_iterations,
             min_iterations=config.dawid_skene_min_iterations,
@@ -87,6 +93,7 @@ class DawidSkeneSettings:
                 config.dawid_skene_permutation_min_majority_agreement
             ),
             class_alignment=config.dawid_skene_class_alignment,
+            explicit_abstention=abstention_mode == "explicit",
         )
 
 
@@ -196,7 +203,10 @@ def _align_classes(
     for 11 classes can differ. ``linear_sum_assignment`` is deterministic on identical input; the
     scores are float64 sums over 89 clients, so exact ties are not something to design around.
     """
-    score = confusion.sum(axis=0)
+    # In explicit-abstention mode the last output column means silence, not a label identity, and
+    # must not participate in the latent-class-to-emitted-label assignment.
+    num_classes = posterior.shape[1]
+    score = confusion[:, :, :num_classes].sum(axis=0)
     rows, permutation = linear_sum_assignment(-score)
     aligned_posterior = np.empty_like(posterior)
     aligned_posterior[:, permutation] = posterior
@@ -244,10 +254,16 @@ def fit_dawid_skene(
     settings: DawidSkeneSettings | None = None,
     senders: tuple[str, ...] = (),
 ) -> DawidSkeneFit:
-    """Fit hard-label Dawid-Skene on ``annotations`` ``(J, N)`` int8, ``ABSTAIN`` = missing.
+    """Fit hard-label Dawid-Skene on an ``annotations`` matrix of shape ``(J, N)``.
 
     ``majority_labels`` is the deterministic majority result for the same batch; it is used only
     for the permutation check and the reported disagreement rate, never as an EM input.
+
+    With ``explicit_abstention=False`` the historical likelihood is reproduced exactly and
+    ``ABSTAIN`` contributes nothing. With it enabled, latent truth still has ``num_classes``
+    states but the emitted alphabet has ``num_classes + 1`` outcomes, the final one representing
+    abstention. The broadcast validity rule remains based on non-abstaining votes, so changing the
+    likelihood cannot change which open samples are scored or distilled.
     """
     settings = settings or DawidSkeneSettings()
     annotations = np.asarray(annotations)
@@ -256,7 +272,15 @@ def fit_dawid_skene(
         return _failed("no_annotations", num_open)
 
     observed = annotations != ABSTAIN
-    per_client = observed.sum(axis=1)
+    # Under the historical model only emitted labels are observations, so the client floor counts
+    # non-abstaining labels. Under the explicit model every position is an emission (including
+    # silence); dropping an all-abstain client here would delete exactly the evidence this mode is
+    # meant to model before EM ever sees it.
+    per_client = (
+        np.full(annotations.shape[0], num_open, dtype=np.int64)
+        if settings.explicit_abstention
+        else observed.sum(axis=1)
+    )
     eligible = per_client >= settings.min_client_annotations
     excluded = tuple(
         senders[j] for j in np.nonzero(~eligible)[0] if j < len(senders)
@@ -274,6 +298,7 @@ def fit_dawid_skene(
 
     num_eligible = annotations.shape[0]
     eps = settings.epsilon
+    num_outputs = num_classes + int(settings.explicit_abstention)
 
     # Per-client observed index/label slices, computed once: the E and M steps both need them and
     # they are the only per-iteration allocation that would otherwise repeat J times per iteration.
@@ -282,6 +307,15 @@ def fit_dawid_skene(
         for j in range(num_eligible)
     ]
     onehots = [np.eye(num_classes, dtype=np.float64)[labels] for _, labels in slices]
+    if settings.explicit_abstention:
+        emissions = np.where(annotations == ABSTAIN, num_classes, annotations).astype(np.int64)
+        output_eye = np.eye(num_outputs, dtype=np.float64)
+        emission_onehots = [output_eye[emissions[j]] for j in range(num_eligible)]
+        likelihood_items = np.ones(num_open, dtype=bool)
+    else:
+        emissions = None
+        emission_onehots = None
+        likelihood_items = observed_items
 
     # Initialization: smoothed per-sample vote proportions. This biases latent class c toward
     # output class c using the repository's own class indices, without reading any true label --
@@ -293,7 +327,9 @@ def fit_dawid_skene(
     posterior /= posterior.sum(axis=1, keepdims=True)
 
     prior = np.full(num_classes, 1.0 / num_classes, dtype=np.float64)
-    confusion = np.tile(np.eye(num_classes, dtype=np.float64), (num_eligible, 1, 1))
+    confusion = np.tile(
+        np.eye(num_classes, num_outputs, dtype=np.float64), (num_eligible, 1, 1)
+    )
     previous_objective = -np.inf
     log_likelihood = float("nan")
     objective = float("nan")
@@ -307,12 +343,15 @@ def fit_dawid_skene(
         # posterior is therefore only a placeholder for the fixed-width output array and must not
         # be counted when estimating the class prior. Including it would let appended all-abstain
         # columns pull the fitted prior towards uniform and change otherwise identical results.
-        prior_counts = posterior[observed_items].sum(axis=0) + settings.class_prior_pseudocount
+        prior_counts = posterior[likelihood_items].sum(axis=0) + settings.class_prior_pseudocount
         new_prior = prior_counts / prior_counts.sum()
         new_confusion = np.empty_like(confusion)
         for j in range(num_eligible):
-            index, _ = slices[j]
-            counts = posterior[index].T @ onehots[j] + settings.confusion_pseudocount
+            if settings.explicit_abstention:
+                counts = posterior.T @ emission_onehots[j] + settings.confusion_pseudocount
+            else:
+                index, _ = slices[j]
+                counts = posterior[index].T @ onehots[j] + settings.confusion_pseudocount
             new_confusion[j] = counts / counts.sum(axis=1, keepdims=True)
 
         if settings.damping < 1.0:
@@ -331,8 +370,11 @@ def fit_dawid_skene(
         log_score = np.tile(np.log(np.maximum(prior, eps)), (num_open, 1))
         log_confusion = np.log(np.maximum(confusion, eps))
         for j in range(num_eligible):
-            index, labels = slices[j]
-            log_score[index] += log_confusion[j][:, labels].T
+            if settings.explicit_abstention:
+                log_score += log_confusion[j][:, emissions[j]].T
+            else:
+                index, labels = slices[j]
+                log_score[index] += log_confusion[j][:, labels].T
 
         row_max = log_score.max(axis=1, keepdims=True)
         exp_shifted = np.exp(log_score - row_max)
@@ -344,7 +386,7 @@ def fit_dawid_skene(
         # Unobserved items contribute log(1) to the likelihood, not log(prior): they carry no
         # evidence, so counting their prior mass would let the objective drift with coverage.
         per_item_loglik = (np.log(row_sum) + row_max).ravel()
-        log_likelihood = float(per_item_loglik[observed_items].sum())
+        log_likelihood = float(per_item_loglik[likelihood_items].sum())
         # Regularized objective: the M-step is a Dirichlet MAP update, so the monotone quantity is
         # the observed-data log-likelihood plus the matching log-prior terms -- not a raw one.
         objective = float(

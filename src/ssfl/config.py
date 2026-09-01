@@ -108,6 +108,13 @@ class HardAggregation(str, Enum):
     dawid_skene_only = "dawid_skene_only"
 
 
+class DawidSkeneAbstentionMode(str, Enum):
+    """Whether client silence is absent evidence or an explicit class-conditional emission."""
+
+    missing = "missing"
+    explicit = "explicit"
+
+
 class DeviceKind(str, Enum):
     cpu = "cpu"
     cuda = "cuda"
@@ -236,6 +243,7 @@ class ExperimentConfig(BaseModel):
     # Server-only: none of these change the wire contract. Majority stays the default and the
     # fallback. See DAWID_SKENE_FEASIBILITY_PLAN.md and output/pdf/dawid_skene_server_changes.pdf.
     ssfl_hard_aggregation: HardAggregation = HardAggregation.majority
+    dawid_skene_abstention_mode: DawidSkeneAbstentionMode = DawidSkeneAbstentionMode.missing
     dawid_skene_warmup_rounds: int = 0
     dawid_skene_max_iterations: int = 100
     dawid_skene_min_iterations: int = 2

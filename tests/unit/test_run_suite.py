@@ -1,6 +1,9 @@
 import gzip
 import json
+import os
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -159,6 +162,32 @@ def test_run_suite_dry_run_writes_generated_config_and_report_without_launching(
     assert report["results"] == [
         {"name": "variant_a", "status": "dry_run", "run_dir": report["results"][0]["run_dir"]}
     ]
+
+
+def test_run_suite_uses_flower_from_the_active_python_environment(
+    tmp_path, configs_dir, monkeypatch
+) -> None:
+    matrix_path = tmp_path / "matrix.yaml"
+    _write_yaml(matrix_path, {"entries": [{"name": "variant_a", "base_profile": "base"}]})
+    monkeypatch.setattr("ssfl.config._git_commit", lambda: "testcommit")
+    invocations = []
+
+    def _capture(command, cwd, env):
+        invocations.append((command, env))
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(subprocess, "run", _capture)
+    run_suite(
+        matrix_path,
+        resume=False,
+        configs_dir=configs_dir,
+        generated_dir=tmp_path / "generated",
+        report_dir=tmp_path / "reports",
+    )
+    expected = str(Path(sys.executable).with_name("flwr"))
+    command, env = invocations[0]
+    assert command[0] == expected
+    assert env["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).parent)
 
 
 def test_run_suite_resume_skips_entry_with_existing_summary(

@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from ssfl.config import (
+    DawidSkeneAbstentionMode,
     ExperimentConfig,
     LabelRepresentation,
     VotingMode,
@@ -12,6 +13,7 @@ from ssfl.config import (
     load_yaml,
     parse_run_config_string,
 )
+from ssfl.protocols.dawid_skene import DawidSkeneSettings
 
 CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configs"
 ALL_PROFILES = ["paper", "paper_batch100", "smoke", "robustness", "deployment", "debug"]
@@ -28,6 +30,16 @@ def test_unknown_key_rejected() -> None:
     base["totally_unknown_field"] = 1
     with pytest.raises(ValidationError):
         ExperimentConfig.model_validate(base)
+
+
+def test_dawid_skene_abstention_mode_defaults_to_missing_and_parses_explicit() -> None:
+    base = load_yaml(CONFIGS_DIR / "experiment1_s3_ds_only.yaml")
+    default = ExperimentConfig.model_validate(base)
+    assert default.dawid_skene_abstention_mode == DawidSkeneAbstentionMode.missing
+    base["dawid_skene_abstention_mode"] = "explicit"
+    explicit = ExperimentConfig.model_validate(base)
+    assert explicit.dawid_skene_abstention_mode == DawidSkeneAbstentionMode.explicit
+    assert DawidSkeneSettings.from_config(explicit).explicit_abstention
 
 
 @pytest.mark.parametrize(

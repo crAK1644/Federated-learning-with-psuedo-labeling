@@ -176,6 +176,28 @@ def test_abstention_is_missing_data_not_a_class():
     assert (fit.labels == truth).mean() > 0.9
 
 
+def test_explicit_abstention_adds_one_emission_without_changing_validity():
+    annotations, _ = _synthetic(seed=6)
+    annotations[0, :200] = ABSTAIN
+    annotations[:, -10:] = ABSTAIN
+    fit = _fit(annotations, explicit_abstention=True)
+    assert fit.numerically_valid, fit.status
+    assert fit.confusion.shape == (annotations.shape[0], NUM_CLASSES, NUM_CLASSES + 1)
+    expected_valid = (annotations != ABSTAIN).sum(axis=0) >= 1
+    np.testing.assert_array_equal(fit.candidate_valid_mask, expected_valid)
+    assert (fit.candidate_labels[~expected_valid] == ABSTAIN).all()
+
+
+def test_explicit_abstention_keeps_an_all_silent_client_as_evidence():
+    annotations, _ = _synthetic(num_clients=5, seed=8)
+    annotations[-1] = ABSTAIN
+    missing = _fit(annotations)
+    explicit = _fit(annotations, explicit_abstention=True)
+    assert missing.eligible_clients == 4
+    assert explicit.eligible_clients == 5
+    assert explicit.confusion.shape == (5, NUM_CLASSES, NUM_CLASSES + 1)
+
+
 def test_all_abstain_items_stay_invalid():
     annotations, _ = _synthetic(seed=7)
     annotations[:, :10] = ABSTAIN

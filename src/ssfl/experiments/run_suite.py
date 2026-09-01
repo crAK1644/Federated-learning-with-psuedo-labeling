@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -155,8 +156,12 @@ def run_suite(
         generated_path = generated_dir / f"{name}.yaml"
         generated_path.write_text(yaml.safe_dump(config.model_dump(mode="json"), sort_keys=True))
 
+        # Resolve Flower next to the Python interpreter running this module. Relying on PATH can
+        # silently mix the project's virtualenv with a system Flower/Python (and, in practice,
+        # paired Python 3.13 + Flower 1.13 with NumPy 2, which fails before the app even starts).
+        environment_flwr = Path(sys.executable).with_name("flwr")
         cmd = [
-            "flwr",
+            str(environment_flwr) if environment_flwr.exists() else "flwr",
             "run",
             str(REPO_ROOT),
             "--run-config",
@@ -178,7 +183,15 @@ def run_suite(
             results.append({"name": name, "status": "dry_run", "run_dir": str(run_dir)})
             continue
 
-        proc = subprocess.run(cmd, cwd=REPO_ROOT)
+        # ``flwr run`` starts ``flower-superlink`` and other executables by name. Prepending the
+        # active interpreter's bin directory keeps those nested subprocesses in the same
+        # environment too; selecting only the top-level ``flwr`` binary is not sufficient.
+        subprocess_env = os.environ.copy()
+        environment_bin = str(Path(sys.executable).parent)
+        subprocess_env["PATH"] = os.pathsep.join(
+            part for part in (environment_bin, subprocess_env.get("PATH", "")) if part
+        )
+        proc = subprocess.run(cmd, cwd=REPO_ROOT, env=subprocess_env)
         if proc.returncode != 0 or not summary_path.exists():
             print(f"[run_suite] FAIL  {name} (exit={proc.returncode})")
             results.append(
