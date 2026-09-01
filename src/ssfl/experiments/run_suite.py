@@ -29,6 +29,7 @@ from typing import Any
 import yaml
 
 from ssfl.config import ExperimentConfig, compute_run_id, load_yaml
+from ssfl.data.manifest import sha256_json
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 CONFIGS_DIR = REPO_ROOT / "configs"
@@ -66,7 +67,21 @@ def _dataset_manifest_hash(config: ExperimentConfig) -> str | None:
     manifest_path = config.data_path / "dataset_manifest.json"
     if not manifest_path.exists():
         return None
-    return json.loads(manifest_path.read_text()).get("manifest_hash")
+    manifest = json.loads(manifest_path.read_text())
+    stored_hash = manifest.get("manifest_hash")
+    if stored_hash:
+        return stored_hash
+
+    # Older exported data bundles can contain the complete canonical manifest body while omitting
+    # its derived hash field. Recompute it instead of weakening the matrix guard. ``created_at``
+    # was deliberately added after hashing during preparation, so it is excluded here too. A
+    # different body still produces a different hash and is rejected by ``verify_dataset_manifest``.
+    hash_body = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"manifest_hash", "created_at"}
+    }
+    return sha256_json(hash_body)
 
 
 def verify_dataset_manifest(

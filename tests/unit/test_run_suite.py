@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from ssfl.config import ExperimentConfig
+from ssfl.data.manifest import sha256_json
 from ssfl.experiments.run_suite import (
     _federation_config,
     _run_dir,
@@ -278,6 +279,21 @@ def test_verify_dataset_manifest_aborts_on_a_different_partition(tmp_path, confi
 
     (data_dir / "dataset_manifest.json").write_text(json.dumps({"manifest_hash": "expected"}))
     verify_dataset_manifest(matrix_path, entries)
+
+
+def test_verify_dataset_manifest_recomputes_an_omitted_hash(tmp_path, configs_dir) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    hash_body = {"seed": 2023, "checksums": {"open/features.npy": "abc"}}
+    expected = sha256_json(hash_body)
+    (data_dir / "dataset_manifest.json").write_text(
+        json.dumps({**hash_body, "created_at": "excluded-from-the-canonical-hash"})
+    )
+    matrix_path = _matrix_with_hash(tmp_path, expected)
+
+    verify_dataset_manifest(
+        matrix_path, build_matrix_configs(matrix_path, configs_dir=configs_dir)
+    )
 
 
 def test_verify_dataset_manifest_is_opt_in(tmp_path, configs_dir) -> None:
