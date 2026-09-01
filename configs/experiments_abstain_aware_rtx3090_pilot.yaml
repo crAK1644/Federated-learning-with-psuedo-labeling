@@ -5,15 +5,17 @@
 #     --matrix configs/experiments_abstain_aware_rtx3090_pilot.yaml
 #
 # The completed ``experiment1_s3_ds_only_200`` run supplies the frozen current-DS control (its
-# first ten rounds). This treatment inherits that profile's CUDA execution, seed, 89 clients, five
-# local epochs, batch size 80, discriminator, hard-vote protocol, and Dawid-Skene hyperparameters.
-# The only behavioural change is that ABSTAIN becomes an explicit class-conditional emission.
-# Ten rounds and denser pilot checkpoints are operational truncations, not algorithm changes.
+# first ten rounds). Its saved manifest -- and the matching MV/hybrid run manifests -- carry the
+# a973... hash locked below. This treatment inherits that profile's CUDA execution, seed, 89
+# clients, five local epochs, batch size 80, discriminator, hard-vote protocol, and Dawid-Skene
+# hyperparameters. The only behavioural change is that ABSTAIN becomes an explicit
+# class-conditional emission. Ten rounds and denser pilot checkpoints are operational truncations,
+# not algorithm changes.
 #
 # Primary endpoint: mean pseudo-label accuracy over rounds 1-10 on the saved aggregation audits.
 # Secondary endpoints: rounds 6-10 test accuracy, emitted-class count, per-class recall, unchanged
 # valid-mask coverage, and numerical DS status. This is a mechanism pilot, not a multi-seed result.
-dataset_manifest_hash: 54023e3de197d9dc16f50a89425d5c44bb594486210aacf16ecaa8cccc86ba65
+dataset_manifest_hash: a97311fe92290d3e97629b59a86ec9fd3f2113ac3e12ded6c6560d7198a036ed
 
 entries:
   - name: abstain_rtx3090_explicit_10
