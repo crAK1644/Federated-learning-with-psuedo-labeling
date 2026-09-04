@@ -115,6 +115,13 @@ class DawidSkeneAbstentionMode(str, Enum):
     explicit = "explicit"
 
 
+class DawidSkeneConfusionModel(str, Enum):
+    """Parameterization of each client's Dawid-Skene emission model."""
+
+    full = "full"
+    one_coin = "one_coin"
+
+
 class DeviceKind(str, Enum):
     cpu = "cpu"
     cuda = "cuda"
@@ -244,6 +251,9 @@ class ExperimentConfig(BaseModel):
     # fallback. See DAWID_SKENE_FEASIBILITY_PLAN.md and output/pdf/dawid_skene_server_changes.pdf.
     ssfl_hard_aggregation: HardAggregation = HardAggregation.majority
     dawid_skene_abstention_mode: DawidSkeneAbstentionMode = DawidSkeneAbstentionMode.missing
+    dawid_skene_confusion_model: DawidSkeneConfusionModel = DawidSkeneConfusionModel.full
+    dawid_skene_one_coin_min_accuracy: float = 0.9
+    dawid_skene_one_coin_pseudocount: float = 1.0
     dawid_skene_warmup_rounds: int = 0
     dawid_skene_max_iterations: int = 100
     dawid_skene_min_iterations: int = 2
@@ -350,6 +360,19 @@ class ExperimentConfig(BaseModel):
             raise ValueError("dawid_skene_damping must be in (0, 1]")
         if not 0.0 <= self.dawid_skene_posterior_threshold <= 1.0:
             raise ValueError("dawid_skene_posterior_threshold must be in [0, 1]")
+        if not 0.0 < self.dawid_skene_one_coin_min_accuracy < 1.0:
+            raise ValueError("dawid_skene_one_coin_min_accuracy must be in (0, 1)")
+        if self.dawid_skene_one_coin_pseudocount <= 0.0:
+            raise ValueError("dawid_skene_one_coin_pseudocount must be > 0")
+        if (
+            self.dawid_skene_confusion_model == DawidSkeneConfusionModel.one_coin
+            and self.dawid_skene_abstention_mode != DawidSkeneAbstentionMode.missing
+        ):
+            raise ValueError(
+                "dawid_skene_confusion_model=one_coin requires "
+                "dawid_skene_abstention_mode=missing: abstention is class-independent and "
+                "therefore cancels from the latent-class posterior"
+            )
         if self.dawid_skene_min_clients < 2:
             raise ValueError(
                 "dawid_skene_min_clients must be >= 2: a latent-class model with fewer than two "

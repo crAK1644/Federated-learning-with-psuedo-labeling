@@ -70,6 +70,12 @@ class DawidSkeneSettings:
     # False reproduces the original missing-at-random likelihood exactly. True gives each client
     # a K+1 output alphabet and lets its decision to abstain carry class-conditional evidence.
     explicit_abstention: bool = False
+    # ``one_coin`` constrains each client to a single accuracy parameter. Conditional on an
+    # error, probability is uniform over the other K-1 labels. This prevents a highly flexible
+    # per-client confusion tensor from turning correlated errors into spurious expertise.
+    confusion_model: str = "full"
+    one_coin_min_accuracy: float = 0.9
+    one_coin_pseudocount: float = 1.0
 
     @classmethod
     def from_config(cls, config) -> "DawidSkeneSettings":
@@ -94,6 +100,9 @@ class DawidSkeneSettings:
             ),
             class_alignment=config.dawid_skene_class_alignment,
             explicit_abstention=abstention_mode == "explicit",
+            confusion_model=config.dawid_skene_confusion_model.value,
+            one_coin_min_accuracy=config.dawid_skene_one_coin_min_accuracy,
+            one_coin_pseudocount=config.dawid_skene_one_coin_pseudocount,
         )
 
 
@@ -247,6 +256,183 @@ def build_annotation_matrix(
     return matrix, senders
 
 
+def _fit_one_coin_dawid_skene(
+    annotations: np.ndarray,
+    num_classes: int,
+    majority_labels: np.ndarray,
+    settings: DawidSkeneSettings,
+    senders: tuple[str, ...],
+) -> DawidSkeneFit:
+    """Fit the constrained one-coin Dawid-Skene likelihood.
+
+    Each eligible client has one accuracy ``q_j``. Given a mistake, its mass is uniform over the
+    remaining labels. Abstention is class-independent, so it is missing from the class likelihood
+    rather than being allowed to overwhelm the emitted labels as a K+1-th class-conditional event.
+    """
+    if settings.explicit_abstention:
+        raise ValueError("one_coin does not support class-conditional explicit abstention")
+    num_open = annotations.shape[1]
+    observed = annotations != ABSTAIN
+    per_client = observed.sum(axis=1)
+    eligible = per_client >= settings.min_client_annotations
+    excluded = tuple(senders[j] for j in np.nonzero(~eligible)[0] if j < len(senders))
+    eligible_senders = tuple(senders[j] for j in np.nonzero(eligible)[0] if j < len(senders))
+    if int(eligible.sum()) < settings.min_clients:
+        return _failed("insufficient_clients", num_open, excluded_clients=excluded)
+
+    annotations = annotations[eligible]
+    observed = observed[eligible]
+    item_counts = observed.sum(axis=0).astype(np.int64)
+    if not item_counts.any():
+        return _failed("no_observations", num_open, excluded_clients=excluded)
+    observed_items = item_counts > 0
+    num_eligible = annotations.shape[0]
+    eps = settings.epsilon
+    slices = [
+        (np.nonzero(observed[j])[0], annotations[j][observed[j]].astype(np.int64))
+        for j in range(num_eligible)
+    ]
+    onehots = [np.eye(num_classes, dtype=np.float64)[labels] for _, labels in slices]
+
+    votes = np.zeros((num_open, num_classes), dtype=np.float64)
+    for index, labels in slices:
+        np.add.at(votes, (index, labels), 1.0)
+    posterior = votes + settings.initialization_pseudocount
+    posterior /= posterior.sum(axis=1, keepdims=True)
+
+    prior = np.full(num_classes, 1.0 / num_classes, dtype=np.float64)
+    accuracies = np.full(num_eligible, settings.one_coin_min_accuracy, dtype=np.float64)
+    confusion = np.empty((num_eligible, num_classes, num_classes), dtype=np.float64)
+    previous_objective = -np.inf
+    log_likelihood = float("nan")
+    objective = float("nan")
+    iterations = 0
+    converged = False
+    stop_reason = "iteration_cap"
+    beta = settings.one_coin_pseudocount
+
+    for iterations in range(1, settings.max_iterations + 1):
+        prior_counts = posterior[observed_items].sum(axis=0) + settings.class_prior_pseudocount
+        new_prior = prior_counts / prior_counts.sum()
+        new_accuracies = np.empty_like(accuracies)
+        for j, (index, labels) in enumerate(slices):
+            expected_correct = posterior[index, labels].sum()
+            estimate = (expected_correct + beta) / (len(index) + 2.0 * beta)
+            new_accuracies[j] = max(float(estimate), settings.one_coin_min_accuracy)
+
+        if settings.damping < 1.0:
+            new_prior = settings.damping * new_prior + (1.0 - settings.damping) * prior
+            new_accuracies = (
+                settings.damping * new_accuracies + (1.0 - settings.damping) * accuracies
+            )
+        prior, accuracies = new_prior, new_accuracies
+
+        off_diagonal = (1.0 - accuracies) / (num_classes - 1)
+        confusion[:] = off_diagonal[:, None, None]
+        diagonal = np.arange(num_classes)
+        confusion[:, diagonal, diagonal] = accuracies[:, None]
+        if not (np.isfinite(prior).all() and np.isfinite(confusion).all()):
+            return _failed("non_finite_parameters", num_open, iterations=iterations)
+
+        log_score = np.tile(np.log(np.maximum(prior, eps)), (num_open, 1))
+        log_confusion = np.log(np.maximum(confusion, eps))
+        for j, (index, labels) in enumerate(slices):
+            log_score[index] += log_confusion[j][:, labels].T
+        row_max = log_score.max(axis=1, keepdims=True)
+        exp_shifted = np.exp(log_score - row_max)
+        row_sum = exp_shifted.sum(axis=1, keepdims=True)
+        posterior = exp_shifted / row_sum
+        if not np.isfinite(posterior).all():
+            return _failed("non_finite_posterior", num_open, iterations=iterations)
+
+        per_item_loglik = (np.log(row_sum) + row_max).ravel()
+        log_likelihood = float(per_item_loglik[observed_items].sum())
+        objective = float(
+            log_likelihood
+            + settings.class_prior_pseudocount * np.log(np.maximum(prior, eps)).sum()
+            + beta
+            * (
+                np.log(np.maximum(accuracies, eps))
+                + np.log(np.maximum(1.0 - accuracies, eps))
+            ).sum()
+        )
+        if not np.isfinite(objective):
+            return _failed("non_finite_objective", num_open, iterations=iterations)
+        scale = max(abs(previous_objective), 1.0)
+        delta = objective - previous_objective
+        if np.isfinite(previous_objective):
+            if delta < -settings.tolerance * scale:
+                return _failed("objective_decreased", num_open, iterations=iterations)
+            if iterations >= settings.min_iterations and delta <= settings.tolerance * scale:
+                converged = True
+                stop_reason = "tolerance"
+                previous_objective = objective
+                break
+        previous_objective = objective
+
+    alignment_permutation: tuple[int, ...] = ()
+    alignment_score = 0.0
+    if settings.class_alignment:
+        posterior, prior, confusion, alignment_permutation, alignment_score = _align_classes(
+            posterior, prior, confusion
+        )
+
+    candidate = posterior.argmax(axis=1).astype(np.int64)
+    max_posterior = posterior.max(axis=1)
+    valid_mask = (item_counts >= settings.min_item_annotations) & (
+        max_posterior >= settings.posterior_threshold
+    )
+    labels = np.where(valid_mask, candidate, ABSTAIN).astype(np.int64)
+    diagonal_fraction = _diagonal_fraction(
+        posterior, slices, onehots, num_classes, settings.confusion_pseudocount
+    )
+    observed_majority = majority_labels != ABSTAIN
+    majority_posterior = np.zeros((num_open, num_classes), dtype=np.float64)
+    majority_posterior[
+        np.nonzero(observed_majority)[0], majority_labels[observed_majority]
+    ] = 1.0
+    reference_diagonal_fraction = _diagonal_fraction(
+        majority_posterior, slices, onehots, num_classes, settings.confusion_pseudocount
+    )
+    comparable = valid_mask & observed_majority
+    majority_agreement = (
+        float((labels[comparable] == majority_labels[comparable]).mean())
+        if comparable.any()
+        else 0.0
+    )
+    diagnostics = dict(
+        iterations=iterations,
+        converged=converged,
+        stop_reason=stop_reason,
+        log_likelihood=log_likelihood,
+        objective=objective,
+        eligible_clients=num_eligible,
+        excluded_clients=excluded,
+        eligible_senders=eligible_senders,
+        diagonal_fraction=diagonal_fraction,
+        reference_diagonal_fraction=reference_diagonal_fraction,
+        majority_agreement=majority_agreement,
+        max_posterior_mean=float(max_posterior[valid_mask].mean()) if valid_mask.any() else 0.0,
+        alignment_permutation=alignment_permutation,
+        alignment_score=alignment_score,
+        numerically_valid=True,
+        candidate_labels=labels,
+        candidate_valid_mask=valid_mask,
+        confusion=confusion,
+        prior=prior,
+        posterior=posterior,
+    )
+    if not converged:
+        return _failed("not_converged", num_open, **diagnostics)
+    if diagonal_fraction <= 1.0 / num_classes:
+        return _failed("permutation_check_chance", num_open, **diagnostics)
+    if diagonal_fraction < settings.permutation_min_diagonal_ratio * reference_diagonal_fraction:
+        return _failed("permutation_check_diagonal", num_open, **diagnostics)
+    if majority_agreement < settings.permutation_min_majority_agreement:
+        return _failed("permutation_check_agreement", num_open, **diagnostics)
+    return DawidSkeneFit(status="ok", labels=labels, valid_mask=valid_mask, **diagnostics)
+
+
 def fit_dawid_skene(
     annotations: np.ndarray,
     num_classes: int,
@@ -270,6 +456,12 @@ def fit_dawid_skene(
     num_open = annotations.shape[1] if annotations.ndim == 2 else 0
     if annotations.ndim != 2 or num_open == 0:
         return _failed("no_annotations", num_open)
+    if settings.confusion_model == "one_coin":
+        return _fit_one_coin_dawid_skene(
+            annotations, num_classes, majority_labels, settings, senders
+        )
+    if settings.confusion_model != "full":
+        raise ValueError(f"unknown Dawid-Skene confusion model {settings.confusion_model!r}")
 
     observed = annotations != ABSTAIN
     # Under the historical model only emitted labels are observations, so the client floor counts

@@ -1,0 +1,21 @@
+# Scenario-3 pure Dawid-Skene treatment: constrained one-coin client reliability.
+#
+# Run from the repository root on the RTX 3090 host:
+#   uv run python -m ssfl.experiments.run_suite \
+#     --matrix configs/experiments_ds_constrained_onecoin_rtx3090_200.yaml
+#
+# The data manifest, seed, partition, 89 clients, CNN, discriminator, threshold policy, training
+# schedule, valid-mask rule and 200-round budget are inherited unchanged from
+# experiment1_s3_ds_only. No open-set class identity or ground-truth label is available to the
+# method. The only experimental factor is the DS confusion parameterization: one scalar q_j per
+# client, constrained to q_j >= 0.90, with errors distributed uniformly across the other classes.
+# The broadcast remains the pure DS posterior argmax; there is no majority fallback or hybrid gate.
+dataset_manifest_hash: a97311fe92290d3e97629b59a86ec9fd3f2113ac3e12ded6c6560d7198a036ed
+
+entries:
+  - name: ds_constrained_onecoin_rtx3090_200
+    base_profile: experiment1_s3_ds_only
+    overrides:
+      dawid_skene_confusion_model: one_coin
+      dawid_skene_one_coin_min_accuracy: 0.9
+      dawid_skene_one_coin_pseudocount: 1.0

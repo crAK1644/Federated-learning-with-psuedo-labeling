@@ -165,6 +165,55 @@ def test_confusion_matrix_tracks_the_client_that_generated_it():
     assert diagonals[:3].min() > diagonals[3]
 
 
+def test_one_coin_confusions_are_symmetric_and_respect_accuracy_floor():
+    annotations, truth = _synthetic(
+        num_items=1_000,
+        accuracy_by_client=[0.97, 0.92, 0.70, 0.55, 0.40],
+        seed=41,
+    )
+    fit = _fit(
+        annotations,
+        confusion_model="one_coin",
+        one_coin_min_accuracy=0.9,
+        one_coin_pseudocount=1.0,
+        class_alignment=False,
+        permutation_min_diagonal_ratio=0.0,
+        permutation_min_majority_agreement=0.0,
+    )
+
+    assert fit.ok, fit.status
+    diagonal = np.diagonal(fit.confusion, axis1=1, axis2=2)
+    assert (diagonal >= 0.9).all()
+    np.testing.assert_allclose(
+        diagonal, np.repeat(diagonal[:, :1], NUM_CLASSES, axis=1), rtol=0.0, atol=1e-12
+    )
+    for client_confusion in fit.confusion:
+        off_diagonal = client_confusion[~np.eye(NUM_CLASSES, dtype=bool)]
+        np.testing.assert_allclose(off_diagonal, off_diagonal[0], rtol=0.0, atol=1e-12)
+    assert (fit.labels == truth).mean() > 0.9
+
+
+def test_one_coin_is_deterministic_and_keeps_missing_items_invalid():
+    annotations, _ = _synthetic(seed=43)
+    annotations[:, :11] = ABSTAIN
+    settings = dict(
+        confusion_model="one_coin",
+        one_coin_min_accuracy=0.9,
+        class_alignment=False,
+        permutation_min_diagonal_ratio=0.0,
+        permutation_min_majority_agreement=0.0,
+    )
+
+    first = _fit(annotations, **settings)
+    second = _fit(annotations, **settings)
+
+    assert first.ok and second.ok
+    np.testing.assert_array_equal(first.labels, second.labels)
+    np.testing.assert_allclose(first.posterior, second.posterior, rtol=0.0, atol=0.0)
+    assert not first.valid_mask[:11].any()
+    assert (first.labels[:11] == ABSTAIN).all()
+
+
 def test_abstention_is_missing_data_not_a_class():
     annotations, truth = _synthetic(seed=5)
     holes = annotations.copy()

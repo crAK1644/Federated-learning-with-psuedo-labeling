@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from ssfl.config import (
     DawidSkeneAbstentionMode,
+    DawidSkeneConfusionModel,
     ExperimentConfig,
     LabelRepresentation,
     VotingMode,
@@ -40,6 +41,33 @@ def test_dawid_skene_abstention_mode_defaults_to_missing_and_parses_explicit() -
     explicit = ExperimentConfig.model_validate(base)
     assert explicit.dawid_skene_abstention_mode == DawidSkeneAbstentionMode.explicit
     assert DawidSkeneSettings.from_config(explicit).explicit_abstention
+
+
+def test_dawid_skene_one_coin_configuration_is_wired_into_settings() -> None:
+    base = load_yaml(CONFIGS_DIR / "experiment1_s3_ds_only.yaml")
+    base.update(
+        dawid_skene_confusion_model="one_coin",
+        dawid_skene_one_coin_min_accuracy=0.9,
+        dawid_skene_one_coin_pseudocount=2.0,
+    )
+    config = ExperimentConfig.model_validate(base)
+    settings = DawidSkeneSettings.from_config(config)
+
+    assert config.dawid_skene_confusion_model == DawidSkeneConfusionModel.one_coin
+    assert settings.confusion_model == "one_coin"
+    assert settings.one_coin_min_accuracy == 0.9
+    assert settings.one_coin_pseudocount == 2.0
+
+
+def test_dawid_skene_one_coin_rejects_class_conditional_abstention() -> None:
+    base = load_yaml(CONFIGS_DIR / "experiment1_s3_ds_only.yaml")
+    base.update(
+        dawid_skene_confusion_model="one_coin",
+        dawid_skene_abstention_mode="explicit",
+    )
+
+    with pytest.raises(ValidationError, match="requires.*missing"):
+        ExperimentConfig.model_validate(base)
 
 
 @pytest.mark.parametrize(
