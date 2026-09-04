@@ -214,6 +214,78 @@ def test_one_coin_is_deterministic_and_keeps_missing_items_invalid():
     assert (first.labels[:11] == ABSTAIN).all()
 
 
+def test_temporal_one_coin_uses_history_but_keeps_current_validity_mask():
+    num_items = 80
+    current = np.vstack(
+        [
+            np.ones(num_items, dtype=np.int8),
+            np.ones(num_items, dtype=np.int8),
+            np.zeros(num_items, dtype=np.int8),
+        ]
+    )
+    previous = np.zeros_like(current)
+    current[:, 0] = ABSTAIN
+    majority = _majority(current)
+    common = dict(
+        confusion_model="one_coin",
+        one_coin_min_accuracy=0.9,
+        class_alignment=False,
+        permutation_min_diagonal_ratio=0.0,
+        permutation_min_majority_agreement=0.0,
+    )
+    local = fit_dawid_skene(
+        current,
+        num_classes=NUM_CLASSES,
+        majority_labels=majority,
+        settings=DawidSkeneSettings(min_clients=2, temporal_window=1, **common),
+        annotation_history=(previous,),
+    )
+    temporal = fit_dawid_skene(
+        current,
+        num_classes=NUM_CLASSES,
+        majority_labels=majority,
+        settings=DawidSkeneSettings(
+            min_clients=2, temporal_window=2, temporal_decay=0.8, **common
+        ),
+        annotation_history=(previous,),
+    )
+
+    assert local.ok and temporal.ok
+    assert (local.labels[1:] == 1).all()
+    assert (temporal.labels[1:] == 0).all()
+    np.testing.assert_array_equal(local.valid_mask, temporal.valid_mask)
+    assert not temporal.valid_mask[0]
+    assert temporal.labels[0] == ABSTAIN
+
+
+def test_temporal_window_one_is_bit_identical_to_round_local_one_coin():
+    current, _ = _synthetic(seed=47)
+    previous, _ = _synthetic(seed=49)
+    settings = DawidSkeneSettings(
+        min_clients=2,
+        confusion_model="one_coin",
+        temporal_window=1,
+        class_alignment=False,
+        permutation_min_diagonal_ratio=0.0,
+        permutation_min_majority_agreement=0.0,
+    )
+    without_history = fit_dawid_skene(
+        current, NUM_CLASSES, _majority(current), settings=settings
+    )
+    ignored_history = fit_dawid_skene(
+        current,
+        NUM_CLASSES,
+        _majority(current),
+        settings=settings,
+        annotation_history=(previous,),
+    )
+
+    np.testing.assert_array_equal(ignored_history.labels, without_history.labels)
+    np.testing.assert_allclose(ignored_history.posterior, without_history.posterior, atol=0.0)
+    np.testing.assert_allclose(ignored_history.confusion, without_history.confusion, atol=0.0)
+    assert ignored_history.objective == without_history.objective
+
+
 def test_abstention_is_missing_data_not_a_class():
     annotations, truth = _synthetic(seed=5)
     holes = annotations.copy()

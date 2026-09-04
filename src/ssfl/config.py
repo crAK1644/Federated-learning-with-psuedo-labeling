@@ -254,6 +254,8 @@ class ExperimentConfig(BaseModel):
     dawid_skene_confusion_model: DawidSkeneConfusionModel = DawidSkeneConfusionModel.full
     dawid_skene_one_coin_min_accuracy: float = 0.9
     dawid_skene_one_coin_pseudocount: float = 1.0
+    dawid_skene_temporal_window: int = 1
+    dawid_skene_temporal_decay: float = 0.8
     dawid_skene_warmup_rounds: int = 0
     dawid_skene_max_iterations: int = 100
     dawid_skene_min_iterations: int = 2
@@ -364,6 +366,18 @@ class ExperimentConfig(BaseModel):
             raise ValueError("dawid_skene_one_coin_min_accuracy must be in (0, 1)")
         if self.dawid_skene_one_coin_pseudocount <= 0.0:
             raise ValueError("dawid_skene_one_coin_pseudocount must be > 0")
+        if self.dawid_skene_temporal_window < 1:
+            raise ValueError("dawid_skene_temporal_window must be >= 1")
+        if not 0.0 < self.dawid_skene_temporal_decay <= 1.0:
+            raise ValueError("dawid_skene_temporal_decay must be in (0, 1]")
+        if (
+            self.dawid_skene_temporal_window > 1
+            and self.dawid_skene_confusion_model != DawidSkeneConfusionModel.one_coin
+        ):
+            raise ValueError(
+                "dawid_skene_temporal_window > 1 requires "
+                "dawid_skene_confusion_model=one_coin"
+            )
         if (
             self.dawid_skene_confusion_model == DawidSkeneConfusionModel.one_coin
             and self.dawid_skene_abstention_mode != DawidSkeneAbstentionMode.missing

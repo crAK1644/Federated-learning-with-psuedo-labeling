@@ -49,6 +49,8 @@ def test_dawid_skene_one_coin_configuration_is_wired_into_settings() -> None:
         dawid_skene_confusion_model="one_coin",
         dawid_skene_one_coin_min_accuracy=0.9,
         dawid_skene_one_coin_pseudocount=2.0,
+        dawid_skene_temporal_window=2,
+        dawid_skene_temporal_decay=0.8,
     )
     config = ExperimentConfig.model_validate(base)
     settings = DawidSkeneSettings.from_config(config)
@@ -57,6 +59,8 @@ def test_dawid_skene_one_coin_configuration_is_wired_into_settings() -> None:
     assert settings.confusion_model == "one_coin"
     assert settings.one_coin_min_accuracy == 0.9
     assert settings.one_coin_pseudocount == 2.0
+    assert settings.temporal_window == 2
+    assert settings.temporal_decay == 0.8
 
 
 def test_dawid_skene_one_coin_rejects_class_conditional_abstention() -> None:
@@ -67,6 +71,14 @@ def test_dawid_skene_one_coin_rejects_class_conditional_abstention() -> None:
     )
 
     with pytest.raises(ValidationError, match="requires.*missing"):
+        ExperimentConfig.model_validate(base)
+
+
+def test_temporal_dawid_skene_requires_one_coin_parameterization() -> None:
+    base = load_yaml(CONFIGS_DIR / "experiment1_s3_ds_only.yaml")
+    base["dawid_skene_temporal_window"] = 2
+
+    with pytest.raises(ValidationError, match="requires.*one_coin"):
         ExperimentConfig.model_validate(base)
 
 

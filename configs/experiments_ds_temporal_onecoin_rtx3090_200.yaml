@@ -1,0 +1,24 @@
+# Scenario-3 pure Dawid-Skene treatment: temporally smoothed constrained one-coin reliability.
+#
+# Run from the repository root on the RTX 3090 host:
+#   uv run python -m ssfl.experiments.run_suite \
+#     --matrix configs/experiments_ds_temporal_onecoin_rtx3090_200.yaml
+#
+# This is Option 1 plus exactly one methodological factor: each open sample's immediately previous
+# annotation vector enters the current DS likelihood at 0.8x the current vector's weight. The two
+# weights are normalized to one effective round, avoiding a hidden posterior-temperature change.
+# Sender rows are aligned by pseudonymous client id. The current round alone determines client
+# eligibility and the valid mask, so data, partition, protocol, coverage and evaluation foundations
+# remain unchanged. The method sees no open-set truth and broadcasts pure DS posterior argmax only;
+# it has no majority fallback, majority gate or hybrid output.
+dataset_manifest_hash: a97311fe92290d3e97629b59a86ec9fd3f2113ac3e12ded6c6560d7198a036ed
+
+entries:
+  - name: ds_temporal_onecoin_rtx3090_200
+    base_profile: experiment1_s3_ds_only
+    overrides:
+      dawid_skene_confusion_model: one_coin
+      dawid_skene_one_coin_min_accuracy: 0.9
+      dawid_skene_one_coin_pseudocount: 1.0
+      dawid_skene_temporal_window: 2
+      dawid_skene_temporal_decay: 0.8

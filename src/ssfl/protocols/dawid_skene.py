@@ -76,6 +76,10 @@ class DawidSkeneSettings:
     confusion_model: str = "full"
     one_coin_min_accuracy: float = 0.9
     one_coin_pseudocount: float = 1.0
+    # Window 1 is the round-local method. Window 2 adds the immediately preceding round with
+    # ``temporal_decay`` weight; current observations always retain weight 1.0.
+    temporal_window: int = 1
+    temporal_decay: float = 0.8
 
     @classmethod
     def from_config(cls, config) -> "DawidSkeneSettings":
@@ -103,6 +107,8 @@ class DawidSkeneSettings:
             confusion_model=config.dawid_skene_confusion_model.value,
             one_coin_min_accuracy=config.dawid_skene_one_coin_min_accuracy,
             one_coin_pseudocount=config.dawid_skene_one_coin_pseudocount,
+            temporal_window=config.dawid_skene_temporal_window,
+            temporal_decay=config.dawid_skene_temporal_decay,
         )
 
 
@@ -262,6 +268,7 @@ def _fit_one_coin_dawid_skene(
     majority_labels: np.ndarray,
     settings: DawidSkeneSettings,
     senders: tuple[str, ...],
+    annotation_history: tuple[np.ndarray, ...],
 ) -> DawidSkeneFit:
     """Fit the constrained one-coin Dawid-Skene likelihood.
 
@@ -271,6 +278,19 @@ def _fit_one_coin_dawid_skene(
     """
     if settings.explicit_abstention:
         raise ValueError("one_coin does not support class-conditional explicit abstention")
+    if settings.temporal_window < 1:
+        raise ValueError("temporal_window must be >= 1")
+    if not 0.0 < settings.temporal_decay <= 1.0:
+        raise ValueError("temporal_decay must be in (0, 1]")
+    history = tuple(np.asarray(previous) for previous in annotation_history)
+    for previous in history:
+        if previous.shape != annotations.shape:
+            raise ValueError(
+                "each temporal annotation matrix must have the same shape as the current round"
+            )
+        if np.any((previous != ABSTAIN) & ((previous < 0) | (previous >= num_classes))):
+            raise ValueError("temporal annotations contain a label outside the class range")
+    history = history[-(settings.temporal_window - 1) :] if settings.temporal_window > 1 else ()
     num_open = annotations.shape[1]
     observed = annotations != ABSTAIN
     per_client = observed.sum(axis=1)
@@ -282,22 +302,46 @@ def _fit_one_coin_dawid_skene(
 
     annotations = annotations[eligible]
     observed = observed[eligible]
+    history = tuple(previous[eligible] for previous in history)
     item_counts = observed.sum(axis=0).astype(np.int64)
     if not item_counts.any():
         return _failed("no_observations", num_open, excluded_clients=excluded)
-    observed_items = item_counts > 0
     num_eligible = annotations.shape[0]
     eps = settings.epsilon
-    slices = [
+    current_slices = [
         (np.nonzero(observed[j])[0], annotations[j][observed[j]].astype(np.int64))
         for j in range(num_eligible)
     ]
-    onehots = [np.eye(num_classes, dtype=np.float64)[labels] for _, labels in slices]
+    current_onehots = [
+        np.eye(num_classes, dtype=np.float64)[labels] for _, labels in current_slices
+    ]
+    temporal_annotations = (*history, annotations)
+    temporal_slices = []
+    for round_annotations in temporal_annotations:
+        round_observed = round_annotations != ABSTAIN
+        temporal_slices.append(
+            [
+                (
+                    np.nonzero(round_observed[j])[0],
+                    round_annotations[j][round_observed[j]].astype(np.int64),
+                )
+                for j in range(num_eligible)
+            ]
+        )
+    round_weights = settings.temporal_decay ** np.arange(
+        len(temporal_slices) - 1, -1, -1, dtype=np.float64
+    )
+    # Keep one effective round of evidence. Without normalization, window 2 would silently make
+    # the posterior 1.8x sharper than the round-local control in addition to adding temporal
+    # information, confounding smoothing with a change in likelihood temperature.
+    round_weights /= round_weights.sum()
 
-    votes = np.zeros((num_open, num_classes), dtype=np.float64)
-    for index, labels in slices:
-        np.add.at(votes, (index, labels), 1.0)
-    posterior = votes + settings.initialization_pseudocount
+    weighted_votes = np.zeros((num_open, num_classes), dtype=np.float64)
+    for weight, round_slices in zip(round_weights, temporal_slices, strict=True):
+        for index, labels in round_slices:
+            np.add.at(weighted_votes, (index, labels), weight)
+    evidence_items = weighted_votes.sum(axis=1) > 0.0
+    posterior = weighted_votes + settings.initialization_pseudocount
     posterior /= posterior.sum(axis=1, keepdims=True)
 
     prior = np.full(num_classes, 1.0 / num_classes, dtype=np.float64)
@@ -312,12 +356,17 @@ def _fit_one_coin_dawid_skene(
     beta = settings.one_coin_pseudocount
 
     for iterations in range(1, settings.max_iterations + 1):
-        prior_counts = posterior[observed_items].sum(axis=0) + settings.class_prior_pseudocount
+        prior_counts = posterior[evidence_items].sum(axis=0) + settings.class_prior_pseudocount
         new_prior = prior_counts / prior_counts.sum()
         new_accuracies = np.empty_like(accuracies)
-        for j, (index, labels) in enumerate(slices):
-            expected_correct = posterior[index, labels].sum()
-            estimate = (expected_correct + beta) / (len(index) + 2.0 * beta)
+        for j in range(num_eligible):
+            expected_correct = 0.0
+            effective_count = 0.0
+            for weight, round_slices in zip(round_weights, temporal_slices, strict=True):
+                index, labels = round_slices[j]
+                expected_correct += weight * float(posterior[index, labels].sum())
+                effective_count += weight * len(index)
+            estimate = (expected_correct + beta) / (effective_count + 2.0 * beta)
             new_accuracies[j] = max(float(estimate), settings.one_coin_min_accuracy)
 
         if settings.damping < 1.0:
@@ -336,8 +385,9 @@ def _fit_one_coin_dawid_skene(
 
         log_score = np.tile(np.log(np.maximum(prior, eps)), (num_open, 1))
         log_confusion = np.log(np.maximum(confusion, eps))
-        for j, (index, labels) in enumerate(slices):
-            log_score[index] += log_confusion[j][:, labels].T
+        for weight, round_slices in zip(round_weights, temporal_slices, strict=True):
+            for j, (index, labels) in enumerate(round_slices):
+                log_score[index] += weight * log_confusion[j][:, labels].T
         row_max = log_score.max(axis=1, keepdims=True)
         exp_shifted = np.exp(log_score - row_max)
         row_sum = exp_shifted.sum(axis=1, keepdims=True)
@@ -346,7 +396,7 @@ def _fit_one_coin_dawid_skene(
             return _failed("non_finite_posterior", num_open, iterations=iterations)
 
         per_item_loglik = (np.log(row_sum) + row_max).ravel()
-        log_likelihood = float(per_item_loglik[observed_items].sum())
+        log_likelihood = float(per_item_loglik[evidence_items].sum())
         objective = float(
             log_likelihood
             + settings.class_prior_pseudocount * np.log(np.maximum(prior, eps)).sum()
@@ -384,7 +434,11 @@ def _fit_one_coin_dawid_skene(
     )
     labels = np.where(valid_mask, candidate, ABSTAIN).astype(np.int64)
     diagonal_fraction = _diagonal_fraction(
-        posterior, slices, onehots, num_classes, settings.confusion_pseudocount
+        posterior,
+        current_slices,
+        current_onehots,
+        num_classes,
+        settings.confusion_pseudocount,
     )
     observed_majority = majority_labels != ABSTAIN
     majority_posterior = np.zeros((num_open, num_classes), dtype=np.float64)
@@ -392,7 +446,11 @@ def _fit_one_coin_dawid_skene(
         np.nonzero(observed_majority)[0], majority_labels[observed_majority]
     ] = 1.0
     reference_diagonal_fraction = _diagonal_fraction(
-        majority_posterior, slices, onehots, num_classes, settings.confusion_pseudocount
+        majority_posterior,
+        current_slices,
+        current_onehots,
+        num_classes,
+        settings.confusion_pseudocount,
     )
     comparable = valid_mask & observed_majority
     majority_agreement = (
@@ -439,6 +497,7 @@ def fit_dawid_skene(
     majority_labels: np.ndarray,
     settings: DawidSkeneSettings | None = None,
     senders: tuple[str, ...] = (),
+    annotation_history: tuple[np.ndarray, ...] = (),
 ) -> DawidSkeneFit:
     """Fit hard-label Dawid-Skene on an ``annotations`` matrix of shape ``(J, N)``.
 
@@ -449,7 +508,9 @@ def fit_dawid_skene(
     ``ABSTAIN`` contributes nothing. With it enabled, latent truth still has ``num_classes``
     states but the emitted alphabet has ``num_classes + 1`` outcomes, the final one representing
     abstention. The broadcast validity rule remains based on non-abstaining votes, so changing the
-    likelihood cannot change which open samples are scored or distilled.
+    likelihood cannot change which open samples are scored or distilled. ``annotation_history``
+    is used only by temporal one-coin DS; it contains older matrices in chronological order and
+    never changes the current round's validity mask.
     """
     settings = settings or DawidSkeneSettings()
     annotations = np.asarray(annotations)
@@ -458,8 +519,15 @@ def fit_dawid_skene(
         return _failed("no_annotations", num_open)
     if settings.confusion_model == "one_coin":
         return _fit_one_coin_dawid_skene(
-            annotations, num_classes, majority_labels, settings, senders
+            annotations,
+            num_classes,
+            majority_labels,
+            settings,
+            senders,
+            annotation_history,
         )
+    if annotation_history:
+        raise ValueError("annotation_history is supported only by one_coin Dawid-Skene")
     if settings.confusion_model != "full":
         raise ValueError(f"unknown Dawid-Skene confusion model {settings.confusion_model!r}")
 

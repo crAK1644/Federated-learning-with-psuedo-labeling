@@ -89,6 +89,7 @@ class SSFLStrategy(Strategy):
         self.require_matching_valid_mask = require_matching_valid_mask
         self.last_dawid_skene_metrics: dict[str, float] = {}
         self._current_node_ids: list[int] = []
+        self._dawid_skene_annotation_history: list[tuple[tuple[str, ...], np.ndarray]] = []
 
     def summary(self) -> None:
         pass  # ponytail: base Strategy.start() already logs round-by-round progress.
@@ -298,6 +299,30 @@ class SSFLStrategy(Strategy):
             return False
         return not self.annotation_rounds or server_round in self.annotation_rounds
 
+    def _aligned_dawid_skene_history(
+        self, current_senders: tuple[str, ...]
+    ) -> tuple[np.ndarray, ...]:
+        """Align saved rows to this round's sender order without inventing observations."""
+        aligned_history = []
+        for historical_senders, historical_annotations in self._dawid_skene_annotation_history:
+            historical_row = {sender: row for row, sender in enumerate(historical_senders)}
+            aligned = np.full((len(current_senders), self.num_open), ABSTAIN, dtype=np.int8)
+            for current_row, sender in enumerate(current_senders):
+                if sender in historical_row:
+                    aligned[current_row] = historical_annotations[historical_row[sender]]
+            aligned_history.append(aligned)
+        return tuple(aligned_history)
+
+    def _remember_dawid_skene_annotations(
+        self, senders: tuple[str, ...], annotations: np.ndarray
+    ) -> None:
+        capacity = self.dawid_skene_settings.temporal_window - 1
+        if capacity <= 0:
+            self._dawid_skene_annotation_history.clear()
+            return
+        self._dawid_skene_annotation_history.append((senders, annotations.copy()))
+        self._dawid_skene_annotation_history = self._dawid_skene_annotation_history[-capacity:]
+
     def _dawid_skene(
         self, server_round: int, proposals, majority
     ) -> tuple[np.ndarray | None, DawidSkeneFit | None, float, str]:
@@ -326,10 +351,12 @@ class SSFLStrategy(Strategy):
             num_open=self.num_open,
             num_classes=NUM_CLASSES,
         )
+        annotation_history = self._aligned_dawid_skene_history(senders)
         if server_round <= self.dawid_skene_warmup_rounds:
             # Early-round majority labels are close to noise (0.186 accurate at round 1 on the
             # recorded scenario-1 run), so a fit there would estimate confusions from noise and
             # steer distillation when it matters most. Warm-up is a reported setting, not a guess.
+            self._remember_dawid_skene_annotations(senders, annotations)
             return annotations, None, 0.0, "warmup"
         started = time.perf_counter()
         try:
@@ -339,11 +366,14 @@ class SSFLStrategy(Strategy):
                 majority_labels=majority.global_labels,
                 settings=self.dawid_skene_settings,
                 senders=senders,
+                annotation_history=annotation_history,
             )
         except (ValueError, FloatingPointError, MemoryError):
             # Any estimator defect falls back to majority rather than stopping the run; the code
             # is visible in metrics so a run that silently degrades to majority is still auditable.
+            self._remember_dawid_skene_annotations(senders, annotations)
             return annotations, None, time.perf_counter() - started, "estimator_error"
+        self._remember_dawid_skene_annotations(senders, annotations)
         return annotations, fit, time.perf_counter() - started, fit.status
 
     def _dawid_skene_metrics(

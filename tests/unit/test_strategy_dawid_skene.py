@@ -11,7 +11,7 @@ from flwr.app.metadata import Metadata
 from flwr.common import Message, MetricRecord, RecordDict
 
 from ssfl.config import HardAggregation, VotingMode
-from ssfl.protocols.dawid_skene import DawidSkeneSettings
+from ssfl.protocols.dawid_skene import ABSTAIN, DawidSkeneSettings
 from ssfl.records import array_record_from_numpy, numpy_from_array_record
 from ssfl.strategies.ssfl import DS_STATUS_CODES, SSFLStrategy
 
@@ -162,3 +162,27 @@ def test_dawid_skene_consumes_no_random_state(replies):
     before = np.random.get_state()[2]
     _strategy(HardAggregation.dawid_skene).aggregate_train(1, replies)
     assert np.random.get_state()[2] == before
+
+
+def test_temporal_history_is_aligned_by_sender_not_row_position():
+    strategy = _strategy(
+        HardAggregation.dawid_skene_only,
+        confusion_model="one_coin",
+        temporal_window=2,
+        class_alignment=True,
+    )
+    historical = np.vstack(
+        [
+            np.full(NUM_OPEN, 1, dtype=np.int8),
+            np.full(NUM_OPEN, 2, dtype=np.int8),
+        ]
+    )
+    strategy._remember_dawid_skene_annotations(("client-a", "client-b"), historical)
+
+    (aligned,) = strategy._aligned_dawid_skene_history(
+        ("client-b", "client-missing", "client-a")
+    )
+
+    assert (aligned[0] == 2).all()
+    assert (aligned[1] == ABSTAIN).all()
+    assert (aligned[2] == 1).all()
