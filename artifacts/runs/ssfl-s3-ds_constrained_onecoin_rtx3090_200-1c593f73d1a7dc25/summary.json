@@ -1,0 +1,16 @@
+{
+  "algorithm": "ssfl",
+  "attempt_id": "1170863-543fbaeb2188",
+  "final_centralized_metrics": {
+    "accuracy": 0.7942134831460674,
+    "distillation_examples": 44400,
+    "distillation_skipped": 0,
+    "loss": 23.83470162014261,
+    "train_loss": 0.02493837459100964
+  },
+  "final_round": 200,
+  "num_rounds": 200,
+  "resumed_from_round": 0,
+  "run_id": "ssfl-s3-ds_constrained_onecoin_rtx3090_200-1c593f73d1a7dc25",
+  "scenario": 3
+}

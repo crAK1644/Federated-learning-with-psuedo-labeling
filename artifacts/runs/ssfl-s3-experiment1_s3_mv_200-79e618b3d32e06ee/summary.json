@@ -1,0 +1,16 @@
+{
+  "algorithm": "ssfl",
+  "attempt_id": "2037537-f9f496bb63c5",
+  "final_centralized_metrics": {
+    "accuracy": 0.8360112359550562,
+    "distillation_examples": 44395,
+    "distillation_skipped": 0,
+    "loss": 9.94533704369926,
+    "train_loss": 0.03433969834474766
+  },
+  "final_round": 200,
+  "num_rounds": 200,
+  "resumed_from_round": 0,
+  "run_id": "ssfl-s3-experiment1_s3_mv_200-79e618b3d32e06ee",
+  "scenario": 3
+}

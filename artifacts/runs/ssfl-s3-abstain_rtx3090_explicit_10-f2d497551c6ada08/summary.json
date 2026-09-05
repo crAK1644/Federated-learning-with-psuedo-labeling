@@ -1,0 +1,16 @@
+{
+  "algorithm": "ssfl",
+  "attempt_id": "2564374-bc4fd691bce6",
+  "final_centralized_metrics": {
+    "accuracy": 0.6903370786516854,
+    "distillation_examples": 44500,
+    "distillation_skipped": 0,
+    "loss": 5.127642092262918,
+    "train_loss": 0.03181803947408799
+  },
+  "final_round": 10,
+  "num_rounds": 10,
+  "resumed_from_round": 0,
+  "run_id": "ssfl-s3-abstain_rtx3090_explicit_10-f2d497551c6ada08",
+  "scenario": 3
+}
