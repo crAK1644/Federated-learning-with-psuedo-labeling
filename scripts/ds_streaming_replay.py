@@ -90,10 +90,10 @@ def replay(rounds, sealed: np.ndarray, settings: DawidSkeneSettings) -> dict:
     """Run the aggregator forward over the recorded rounds, carrying state, and score each one."""
     state = None
     deltas, ds_accuracy, mv_accuracy, statuses = [], [], [], []
-    for _, annotations, majority, majority_mask in rounds:
-        senders = tuple(f"c{j:03d}" for j in range(annotations.shape[0]))
+    for _, votes, majority, majority_mask in rounds:
+        senders = tuple(f"c{j:03d}" for j in range(votes.shape[0]))
         fit = fit_dawid_skene(
-            annotations,
+            votes,
             num_classes=NUM_CLASSES,
             majority_labels=majority,
             settings=settings,

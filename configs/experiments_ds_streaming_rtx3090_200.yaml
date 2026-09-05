@@ -1,0 +1,60 @@
+# Full-length RTX 3090 arm for streaming (online-EM) Dawid-Skene in Scenario 3.
+#
+# Run from the repository root (on the RTX box that is ~/Desktop/SSFL/ssfl-code):
+#   uv run python -m ssfl.experiments.run_suite \
+#     --matrix configs/experiments_ds_streaming_rtx3090_200.yaml
+#
+# It inherits ``experiment1_s3_ds_only`` untouched -- 200 rounds, checkpoints at 10/50/100/150/200,
+# seed 2023, CUDA, 89 clients, five local epochs, batch 80, discriminator, hard votes, and
+# ``ssfl_hard_aggregation: dawid_skene_only`` (pure DS: no majority fallback, no hybrid). The only
+# thing that changes is the server-side aggregation function itself: the confusion matrices are now
+# MAP-estimated under a diagonally-dominant Dirichlet prior and their sufficient statistics are
+# carried across rounds with exponential decay, instead of being re-fitted from one round's votes
+# and thrown away. Labels for round t are still decided from round t's votes alone.
+#
+# Majority vote is a point in this family (alpha -> inf, or before any evidence has accumulated:
+# every client's confusion collapses to P0, the per-vote log-likelihood ratio becomes constant, and
+# the argmax is the vote count), so the arm degrades toward the MV baseline rather than collapsing.
+#
+# HYPERPARAMETERS. Chosen by the offline replay gate over the MV arm's 200 recorded rounds
+# (scripts/ds_streaming_replay.py --arm mv --sweep), then re-confirmed with --gate:
+#
+#   mean delta +0.0282   last-20 +0.0209   negative rounds 5/200   round 200: 0.8635 vs MV 0.8516
+#   every round's dawid_skene_status ok; alignment_permutation identity throughout
+#
+# theta is NOT a free knob despite what the grid's top band suggests: at theta=0.90 the same
+# configuration gives mean +0.0133 with 73 of 200 rounds negative. 0.95 is load-bearing.
+#
+# state_init_rounds is dimensionless on purpose -- "the prior is worth R0 rounds of one client's
+# own evidence" -- so it transfers to a different open-set size or client count. A raw count would
+# silently mean something else.
+#
+# STATED FAILURE MODE. Replayed on the *degraded* substrates instead of the MV arm's annotations,
+# this same aggregator loses: ds_only mean -0.0227 (190/200 rounds negative), hybrid mean -0.0021
+# (108/200). Those are what a run looks like once its clients have already trained on bad labels.
+# state_init_rounds is the guard against entering that regime, and this arm is the test of it.
+#
+# BUDGET. 200 rounds at the ~144 s/round measured on this hardware at these settings: roughly 8 h.
+# Sequential only -- eight concurrent clients at 0.125 GPU each already saturate the card.
+#
+# The comparison arms are already on disk and are NOT rerun here:
+#   experiment1_s3_mv_200       -- the Deney 1 winner, majority vote (last-20 model acc 0.8365)
+#   experiment1_s3_ds_only_200  -- the paired control, same profile, batch DS
+#   experiment1_s3_hybrid_200   -- the third Deney 1 arm
+#
+# SUCCESS CRITERION, registered before the run: last-20-round mean model accuracy > 0.8365.
+#
+# The hash below is the archived Scenario 3 partition the arms above were all scored on. run_suite
+# refuses to start if artifacts/data/dataset_manifest.json hashes to anything else, which is the
+# only check that catches a partition re-prepared between arms.
+dataset_manifest_hash: a97311fe92290d3e97629b59a86ec9fd3f2113ac3e12ded6c6560d7198a036ed
+
+entries:
+  - name: ds_streaming_rtx3090_200
+    base_profile: experiment1_s3_ds_only
+    overrides:
+      dawid_skene_confusion_prior: diagonal
+      dawid_skene_confusion_prior_diagonal: 0.95
+      dawid_skene_confusion_pseudocount: 20.0
+      dawid_skene_state_decay: 0.9
+      dawid_skene_state_init_rounds: 150.0
