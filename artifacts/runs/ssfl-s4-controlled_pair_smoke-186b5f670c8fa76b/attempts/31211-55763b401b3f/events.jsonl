@@ -1,0 +1,1 @@
+{"algorithm": "ssfl", "attempt_id": "31211-55763b401b3f", "dataset_hash": "8564aa29919faf55579caa6a1efa542d0c9ddc49881159432ef66f3bfb188776", "device": "cpu", "level": "INFO", "logger": "ssfl", "message": "run_start", "resume_round": 0, "run_id": "ssfl-s4-controlled_pair_smoke-186b5f670c8fa76b", "scenario": 4, "ts": 1787096309.393685}

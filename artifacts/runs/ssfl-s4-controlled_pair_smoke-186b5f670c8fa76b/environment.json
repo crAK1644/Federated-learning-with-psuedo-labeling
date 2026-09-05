@@ -1,0 +1,32 @@
+{
+  "captured_at": "2026-08-18T23:38:27.028773+00:00",
+  "cpu_count": 10,
+  "cublas_workspace_config": ":4096:8",
+  "cuda_available": false,
+  "cuda_devices": [],
+  "cuda_version": null,
+  "cudnn_benchmark": false,
+  "cudnn_deterministic": false,
+  "cudnn_version": null,
+  "dependency_versions": {
+    "flwr": "1.32.1",
+    "numpy": "2.5.1",
+    "pandas": "3.0.5",
+    "pyarrow": "25.0.1",
+    "pydantic": "2.13.4",
+    "ray": "2.55.1",
+    "sklearn": "1.9.0"
+  },
+  "deterministic_algorithms_enabled": true,
+  "float32_matmul_precision": "highest",
+  "git_commit": "1e15cc7724d3c0226fbeb1c09de4fc163dc5ae73",
+  "git_dirty": true,
+  "machine": "arm64",
+  "mps_available": true,
+  "nvidia_smi": null,
+  "platform": "macOS-26.5.1-arm64-arm-64bit",
+  "processor": "arm",
+  "python_version": "3.12.13",
+  "ram_bytes": 17179869184,
+  "torch_version": "2.6.0"
+}

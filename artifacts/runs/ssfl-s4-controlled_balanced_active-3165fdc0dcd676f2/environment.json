@@ -1,0 +1,40 @@
+{
+  "captured_at": "2026-08-21T11:53:25.514999+00:00",
+  "cpu_count": 20,
+  "cublas_workspace_config": ":4096:8",
+  "cuda_available": true,
+  "cuda_devices": [
+    {
+      "compute_capability": "8.6",
+      "index": 0,
+      "multi_processor_count": 82,
+      "name": "NVIDIA GeForce RTX 3090",
+      "total_memory_bytes": 25327697920
+    }
+  ],
+  "cuda_version": "12.4",
+  "cudnn_benchmark": false,
+  "cudnn_deterministic": false,
+  "cudnn_version": 90100,
+  "dependency_versions": {
+    "flwr": "1.32.1",
+    "numpy": "2.5.1",
+    "pandas": "3.0.5",
+    "pyarrow": "25.0.1",
+    "pydantic": "2.13.4",
+    "ray": "2.55.1",
+    "sklearn": "1.9.0"
+  },
+  "deterministic_algorithms_enabled": true,
+  "float32_matmul_precision": "highest",
+  "git_commit": "d96bd3aab006e3aaa3cf640f2b1f7e66cd09c393",
+  "git_dirty": true,
+  "machine": "x86_64",
+  "mps_available": false,
+  "nvidia_smi": "560.35.05, NVIDIA GeForce RTX 3090, GPU-0d6e6465-4c8f-e7b0-3f4e-ae673cc8a418",
+  "platform": "Linux-6.8.0-136-generic-x86_64-with-glibc2.35",
+  "processor": "x86_64",
+  "python_version": "3.12.13",
+  "ram_bytes": 33353482240,
+  "torch_version": "2.6.0+cu124"
+}

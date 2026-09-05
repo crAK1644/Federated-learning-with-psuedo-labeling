@@ -1,0 +1,16 @@
+{
+  "algorithm": "ssfl",
+  "attempt_id": "662464-9b964b84c799",
+  "final_centralized_metrics": {
+    "accuracy": 0.41337078651685394,
+    "distillation_examples": 43110,
+    "distillation_skipped": 0,
+    "loss": 25.07301733257228,
+    "train_loss": 0.07054410133587737
+  },
+  "final_round": 50,
+  "num_rounds": 50,
+  "resumed_from_round": 0,
+  "run_id": "ssfl-s4-controlled_balanced_majority-a8832359c6e5d055",
+  "scenario": 4
+}
