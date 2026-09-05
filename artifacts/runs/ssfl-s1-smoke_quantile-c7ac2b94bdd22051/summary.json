@@ -1,0 +1,16 @@
+{
+  "algorithm": "ssfl",
+  "attempt_id": "21932-726422531109",
+  "final_centralized_metrics": {
+    "accuracy": 0.3094943820224719,
+    "distillation_examples": 8869,
+    "distillation_skipped": 0,
+    "loss": 5.790438933959126,
+    "train_loss": 0.7789295981615557
+  },
+  "final_round": 2,
+  "num_rounds": 2,
+  "resumed_from_round": 0,
+  "run_id": "ssfl-s1-smoke_quantile-c7ac2b94bdd22051",
+  "scenario": 1
+}

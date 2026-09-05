@@ -1,0 +1,12 @@
+{
+  "algorithm": "ssfl",
+  "final_centralized_metrics": {
+    "accuracy": 0.3714606741573034,
+    "loss": 5.707865265243467,
+    "train_loss": 0.5875220967337806
+  },
+  "final_round": 2,
+  "num_rounds": 2,
+  "run_id": "ssfl-s1-smoke_label_soft_4dp-7646e0b6515e45f7",
+  "scenario": 1
+}

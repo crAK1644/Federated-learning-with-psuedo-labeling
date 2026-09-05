@@ -1,0 +1,20 @@
+{
+  "captured_at": "2026-07-21T16:57:02.472112+00:00",
+  "cuda_available": false,
+  "dependency_versions": {
+    "flwr": "1.32.1",
+    "numpy": "2.5.1",
+    "pandas": "3.0.3",
+    "pyarrow": "25.0.0",
+    "pydantic": "2.13.4",
+    "ray": "2.55.1",
+    "sklearn": "1.9.0"
+  },
+  "git_commit": "42aaac56e9f00dc4c3e23ad3fb5da6fe04ab6dbf",
+  "machine": "arm64",
+  "mps_available": true,
+  "platform": "macOS-26.5.1-arm64-arm-64bit",
+  "processor": "arm",
+  "python_version": "3.12.13",
+  "torch_version": "2.13.0"
+}
