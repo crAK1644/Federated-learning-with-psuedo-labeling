@@ -70,6 +70,24 @@ class DawidSkeneSettings:
     # False reproduces the original missing-at-random likelihood exactly. True gives each client
     # a K+1 output alphabet and lets its decision to abstain carry class-conditional evidence.
     explicit_abstention: bool = False
+    # Shape of the Dirichlet prior on each confusion row. "uniform" spreads
+    # ``confusion_pseudocount`` flat over every cell, which shrinks a client towards the uniform
+    # matrix and destroys the vote signal rather than regularizing it. "diagonal" centres the
+    # prior on a diagonally dominant matrix instead, which makes deterministic majority vote the
+    # ``confusion_pseudocount -> inf`` limit of this estimator: every client's confusion collapses
+    # to the same P0, the per-vote log-likelihood ratio becomes a constant, and the argmax is the
+    # vote count. That is what lets the streaming path degrade to majority rather than collapse.
+    confusion_prior: str = "uniform"
+    confusion_prior_diagonal: float = 0.9
+    # Online EM. > 0 carries each client's confusion sufficient statistics across communication
+    # rounds with this exponential decay instead of refitting 89 x K x K parameters from a single
+    # round of votes; 0.0 keeps the historical batch EM path exactly.
+    state_decay: float = 0.0
+    # Initial prior mass, expressed in "rounds of one client's own evidence" rather than raw
+    # counts, so the same number means the same thing on a dataset with a different open-set size
+    # or client count. Decays as ``state_decay ** round``: the aggregator starts as majority vote
+    # and hands over to the fitted confusion matrices as evidence accumulates.
+    state_init_rounds: float = 0.0
 
     @classmethod
     def from_config(cls, config) -> "DawidSkeneSettings":
@@ -94,7 +112,30 @@ class DawidSkeneSettings:
             ),
             class_alignment=config.dawid_skene_class_alignment,
             explicit_abstention=abstention_mode == "explicit",
+            confusion_prior=getattr(
+                getattr(config, "dawid_skene_confusion_prior", "uniform"), "value",
+                getattr(config, "dawid_skene_confusion_prior", "uniform"),
+            ),
+            confusion_prior_diagonal=getattr(
+                config, "dawid_skene_confusion_prior_diagonal", 0.9
+            ),
+            state_decay=getattr(config, "dawid_skene_state_decay", 0.0),
+            state_init_rounds=getattr(config, "dawid_skene_state_init_rounds", 0.0),
         )
+
+
+@dataclass
+class DawidSkeneState:
+    """Cross-round confusion-matrix sufficient statistics, keyed by sender id.
+
+    Keyed by sender and not by row position on purpose: a client that drops out of one round and
+    rejoins later must get its own statistics back, not whichever row index it happens to occupy.
+    Restricted like ``DawidSkeneFit.confusion`` -- it is per-client behaviour, never goes on the
+    wire and is never written to the default audit output.
+    """
+
+    counts: dict[str, np.ndarray] = field(default_factory=dict)
+    rounds: int = 0
 
 
 @dataclass(frozen=True)
@@ -137,6 +178,9 @@ class DawidSkeneFit:
     confusion: np.ndarray | None = field(default=None, repr=False)
     prior: np.ndarray | None = field(default=None, repr=False)
     posterior: np.ndarray | None = field(default=None, repr=False)
+    # Updated online-EM statistics the caller must thread into the next round. None on the batch
+    # path and on every failure, so a caller that drops it simply gets the historical behaviour.
+    state: "DawidSkeneState | None" = field(default=None, repr=False)
 
     @property
     def ok(self) -> bool:
@@ -162,6 +206,30 @@ def _failed(reason: str, num_open: int, **overrides) -> DawidSkeneFit:
     )
     base.update(overrides)
     return DawidSkeneFit(**base)
+
+
+def _confusion_pseudocounts(
+    settings: DawidSkeneSettings, num_classes: int, num_outputs: int
+) -> np.ndarray:
+    """The Dirichlet pseudocount matrix added to every client's confusion counts.
+
+    "uniform" returns a constant ``confusion_pseudocount`` in every cell, which is bit-identical
+    to the scalar the M-step used historically. "diagonal" returns ``alpha * P0`` for the
+    diagonally dominant ``P0[c, k] = theta if c == k else (1 - theta) / (num_outputs - 1)``. In
+    explicit-abstention mode the extra silence column is part of the off-diagonal mass, which is
+    the neutral choice: the prior says nothing about how often a client abstains.
+    """
+    alpha = float(settings.confusion_pseudocount)
+    if settings.confusion_prior == "uniform":
+        return np.full((num_classes, num_outputs), alpha, dtype=np.float64)
+    if settings.confusion_prior != "diagonal":
+        raise ValueError(f"unknown confusion_prior {settings.confusion_prior!r}")
+    theta = float(settings.confusion_prior_diagonal)
+    p0 = np.full(
+        (num_classes, num_outputs), (1.0 - theta) / (num_outputs - 1), dtype=np.float64
+    )
+    p0[np.arange(num_classes), np.arange(num_classes)] = theta
+    return alpha * p0
 
 
 def _diagonal_fraction(posterior, slices, onehots, num_classes: int, pseudocount: float) -> float:
@@ -253,6 +321,7 @@ def fit_dawid_skene(
     majority_labels: np.ndarray,
     settings: DawidSkeneSettings | None = None,
     senders: tuple[str, ...] = (),
+    state: "DawidSkeneState | None" = None,
 ) -> DawidSkeneFit:
     """Fit hard-label Dawid-Skene on an ``annotations`` matrix of shape ``(J, N)``.
 
@@ -264,6 +333,13 @@ def fit_dawid_skene(
     states but the emitted alphabet has ``num_classes + 1`` outcomes, the final one representing
     abstention. The broadcast validity rule remains based on non-abstaining votes, so changing the
     likelihood cannot change which open samples are scored or distilled.
+
+    With ``settings.state_decay > 0`` the estimator runs online EM instead: each client's confusion
+    matrix comes from ``state`` -- the decayed sufficient statistics of PREVIOUS rounds -- one
+    E-step decides this round's labels from THIS round's votes alone, and the statistics are then
+    updated. The returned fit carries the new ``state``, which the caller threads into the next
+    round. This does not mix previous rounds' annotations into the current label decision; only
+    the confusion-matrix statistics are pooled.
     """
     settings = settings or DawidSkeneSettings()
     annotations = np.asarray(annotations)
@@ -299,6 +375,9 @@ def fit_dawid_skene(
     num_eligible = annotations.shape[0]
     eps = settings.epsilon
     num_outputs = num_classes + int(settings.explicit_abstention)
+    pseudocounts = _confusion_pseudocounts(settings, num_classes, num_outputs)
+    streaming = settings.state_decay > 0.0
+    updated_state: DawidSkeneState | None = None
 
     # Per-client observed index/label slices, computed once: the E and M steps both need them and
     # they are the only per-iteration allocation that would otherwise repeat J times per iteration.
@@ -317,56 +396,37 @@ def fit_dawid_skene(
         emission_onehots = None
         likelihood_items = observed_items
 
-    # Initialization: smoothed per-sample vote proportions. This biases latent class c toward
-    # output class c using the repository's own class indices, without reading any true label --
-    # it does not mathematically prevent label switching, which is what the post-fit check is for.
-    votes = np.zeros((num_open, num_classes), dtype=np.float64)
-    for index, labels in slices:
-        np.add.at(votes, (index, labels), 1.0)
-    posterior = votes + settings.initialization_pseudocount
-    posterior /= posterior.sum(axis=1, keepdims=True)
+    if streaming:
+        # --- Online EM ------------------------------------------------------------------------
+        # One E-step per round, deliberately, with no inner EM loop: refitting the confusion
+        # matrices inside the round on the round's own posterior lets them confirm the labels they
+        # just produced, which measures worse than this. Standard online EM, not a shortcut.
+        if len(eligible_senders) != num_eligible:
+            return _failed("state_requires_senders", num_open, excluded_clients=excluded)
+        previous = state.counts if state is not None else {}
+        rounds_seen = state.rounds if state is not None else 0
+        p0 = pseudocounts / pseudocounts.sum(axis=1, keepdims=True)
+        statistics = []
+        for j, sender in enumerate(eligible_senders):
+            carried = previous.get(sender)
+            if carried is None:
+                # Prior mass in this client's own units: one round of its evidence spreads its
+                # observed votes over num_classes confusion rows, so R0 rounds is R0 * n_j / K.
+                per_round_row_mass = (
+                    num_open if settings.explicit_abstention else int(slices[j][0].size)
+                ) / num_classes
+                carried = settings.state_init_rounds * per_round_row_mass * p0
+            statistics.append(np.asarray(carried, dtype=np.float64))
 
-    prior = np.full(num_classes, 1.0 / num_classes, dtype=np.float64)
-    confusion = np.tile(
-        np.eye(num_classes, num_outputs, dtype=np.float64), (num_eligible, 1, 1)
-    )
-    previous_objective = -np.inf
-    log_likelihood = float("nan")
-    objective = float("nan")
-    iterations = 0
-    converged = False
-    stop_reason = "iteration_cap"
-
-    for iterations in range(1, settings.max_iterations + 1):
-        # --- M-step: posterior-weighted counts + Dirichlet pseudocounts ---------------------
-        # An item with no annotations is absent from the Dawid-Skene likelihood. Its initialized
-        # posterior is therefore only a placeholder for the fixed-width output array and must not
-        # be counted when estimating the class prior. Including it would let appended all-abstain
-        # columns pull the fitted prior towards uniform and change otherwise identical results.
-        prior_counts = posterior[likelihood_items].sum(axis=0) + settings.class_prior_pseudocount
-        new_prior = prior_counts / prior_counts.sum()
-        new_confusion = np.empty_like(confusion)
-        for j in range(num_eligible):
-            if settings.explicit_abstention:
-                counts = posterior.T @ emission_onehots[j] + settings.confusion_pseudocount
-            else:
-                index, _ = slices[j]
-                counts = posterior[index].T @ onehots[j] + settings.confusion_pseudocount
-            new_confusion[j] = counts / counts.sum(axis=1, keepdims=True)
-
-        if settings.damping < 1.0:
-            new_prior = settings.damping * new_prior + (1.0 - settings.damping) * prior
-            new_confusion = (
-                settings.damping * new_confusion + (1.0 - settings.damping) * confusion
-            )
-        prior, confusion = new_prior, new_confusion
-
+        # Confusion from PAST rounds only. Uniform class prior, not a fitted one: it is what makes
+        # the majority-vote limit exact (a fitted prior would tilt the argmax away from the vote
+        # count as the pseudocount grows).
+        counts = np.stack(statistics) + pseudocounts
+        confusion = counts / counts.sum(axis=2, keepdims=True)
+        prior = np.full(num_classes, 1.0 / num_classes, dtype=np.float64)
         if not (np.isfinite(prior).all() and np.isfinite(confusion).all()):
-            return _failed("non_finite_parameters", num_open, iterations=iterations)
-        if abs(prior.sum() - 1.0) > 1e-8 or np.abs(confusion.sum(axis=2) - 1.0).max() > 1e-8:
-            return _failed("normalization_invariant_failed", num_open, iterations=iterations)
+            return _failed("non_finite_parameters", num_open, iterations=1)
 
-        # --- E-step: log-space posterior over hidden classes --------------------------------
         log_score = np.tile(np.log(np.maximum(prior, eps)), (num_open, 1))
         log_confusion = np.log(np.maximum(confusion, eps))
         for j in range(num_eligible):
@@ -375,39 +435,126 @@ def fit_dawid_skene(
             else:
                 index, labels = slices[j]
                 log_score[index] += log_confusion[j][:, labels].T
-
         row_max = log_score.max(axis=1, keepdims=True)
         exp_shifted = np.exp(log_score - row_max)
         row_sum = exp_shifted.sum(axis=1, keepdims=True)
         posterior = exp_shifted / row_sum
         if not np.isfinite(posterior).all():
-            return _failed("non_finite_posterior", num_open, iterations=iterations)
+            return _failed("non_finite_posterior", num_open, iterations=1)
 
-        # Unobserved items contribute log(1) to the likelihood, not log(prior): they carry no
-        # evidence, so counting their prior mass would let the objective drift with coverage.
         per_item_loglik = (np.log(row_sum) + row_max).ravel()
         log_likelihood = float(per_item_loglik[likelihood_items].sum())
-        # Regularized objective: the M-step is a Dirichlet MAP update, so the monotone quantity is
-        # the observed-data log-likelihood plus the matching log-prior terms -- not a raw one.
         objective = float(
             log_likelihood
             + settings.class_prior_pseudocount * np.log(np.maximum(prior, eps)).sum()
-            + settings.confusion_pseudocount * np.log(np.maximum(confusion, eps)).sum()
+            + float((pseudocounts * np.log(np.maximum(confusion, eps))).sum())
         )
-        if not np.isfinite(objective):
-            return _failed("non_finite_objective", num_open, iterations=iterations)
 
-        scale = max(abs(previous_objective), 1.0)
-        delta = objective - previous_objective
-        if np.isfinite(previous_objective):
-            if delta < -settings.tolerance * scale:
-                return _failed("objective_decreased", num_open, iterations=iterations)
-            if iterations >= settings.min_iterations and delta <= settings.tolerance * scale:
-                converged = True
-                stop_reason = "tolerance"
-                previous_objective = objective
-                break
-        previous_objective = objective
+        carried_counts = dict(previous)
+        for j, sender in enumerate(eligible_senders):
+            if settings.explicit_abstention:
+                update = posterior.T @ emission_onehots[j]
+            else:
+                index, _ = slices[j]
+                update = posterior[index].T @ onehots[j]
+            carried_counts[sender] = settings.state_decay * statistics[j] + update
+        updated_state = DawidSkeneState(counts=carried_counts, rounds=rounds_seen + 1)
+
+        iterations = 1
+        converged = True
+        stop_reason = "online_em"
+    else:
+        # Initialization: smoothed per-sample vote proportions. This biases latent class c toward
+        # output class c using the repository's own class indices, without reading any true label --
+        # it does not mathematically prevent label switching, which is what the post-fit check is for.
+        votes = np.zeros((num_open, num_classes), dtype=np.float64)
+        for index, labels in slices:
+            np.add.at(votes, (index, labels), 1.0)
+        posterior = votes + settings.initialization_pseudocount
+        posterior /= posterior.sum(axis=1, keepdims=True)
+
+        prior = np.full(num_classes, 1.0 / num_classes, dtype=np.float64)
+        confusion = np.tile(
+            np.eye(num_classes, num_outputs, dtype=np.float64), (num_eligible, 1, 1)
+        )
+        previous_objective = -np.inf
+        log_likelihood = float("nan")
+        objective = float("nan")
+        iterations = 0
+        converged = False
+        stop_reason = "iteration_cap"
+
+        for iterations in range(1, settings.max_iterations + 1):
+            # --- M-step: posterior-weighted counts + Dirichlet pseudocounts ---------------------
+            # An item with no annotations is absent from the Dawid-Skene likelihood. Its initialized
+            # posterior is therefore only a placeholder for the fixed-width output array and must not
+            # be counted when estimating the class prior. Including it would let appended all-abstain
+            # columns pull the fitted prior towards uniform and change otherwise identical results.
+            prior_counts = posterior[likelihood_items].sum(axis=0) + settings.class_prior_pseudocount
+            new_prior = prior_counts / prior_counts.sum()
+            new_confusion = np.empty_like(confusion)
+            for j in range(num_eligible):
+                if settings.explicit_abstention:
+                    counts = posterior.T @ emission_onehots[j] + pseudocounts
+                else:
+                    index, _ = slices[j]
+                    counts = posterior[index].T @ onehots[j] + pseudocounts
+                new_confusion[j] = counts / counts.sum(axis=1, keepdims=True)
+
+            if settings.damping < 1.0:
+                new_prior = settings.damping * new_prior + (1.0 - settings.damping) * prior
+                new_confusion = (
+                    settings.damping * new_confusion + (1.0 - settings.damping) * confusion
+                )
+            prior, confusion = new_prior, new_confusion
+
+            if not (np.isfinite(prior).all() and np.isfinite(confusion).all()):
+                return _failed("non_finite_parameters", num_open, iterations=iterations)
+            if abs(prior.sum() - 1.0) > 1e-8 or np.abs(confusion.sum(axis=2) - 1.0).max() > 1e-8:
+                return _failed("normalization_invariant_failed", num_open, iterations=iterations)
+
+            # --- E-step: log-space posterior over hidden classes --------------------------------
+            log_score = np.tile(np.log(np.maximum(prior, eps)), (num_open, 1))
+            log_confusion = np.log(np.maximum(confusion, eps))
+            for j in range(num_eligible):
+                if settings.explicit_abstention:
+                    log_score += log_confusion[j][:, emissions[j]].T
+                else:
+                    index, labels = slices[j]
+                    log_score[index] += log_confusion[j][:, labels].T
+
+            row_max = log_score.max(axis=1, keepdims=True)
+            exp_shifted = np.exp(log_score - row_max)
+            row_sum = exp_shifted.sum(axis=1, keepdims=True)
+            posterior = exp_shifted / row_sum
+            if not np.isfinite(posterior).all():
+                return _failed("non_finite_posterior", num_open, iterations=iterations)
+
+            # Unobserved items contribute log(1) to the likelihood, not log(prior): they carry no
+            # evidence, so counting their prior mass would let the objective drift with coverage.
+            per_item_loglik = (np.log(row_sum) + row_max).ravel()
+            log_likelihood = float(per_item_loglik[likelihood_items].sum())
+            # Regularized objective: the M-step is a Dirichlet MAP update, so the monotone quantity is
+            # the observed-data log-likelihood plus the matching log-prior terms -- not a raw one.
+            objective = float(
+                log_likelihood
+                + settings.class_prior_pseudocount * np.log(np.maximum(prior, eps)).sum()
+                + float((pseudocounts * np.log(np.maximum(confusion, eps))).sum())
+            )
+            if not np.isfinite(objective):
+                return _failed("non_finite_objective", num_open, iterations=iterations)
+
+            scale = max(abs(previous_objective), 1.0)
+            delta = objective - previous_objective
+            if np.isfinite(previous_objective):
+                if delta < -settings.tolerance * scale:
+                    return _failed("objective_decreased", num_open, iterations=iterations)
+                if iterations >= settings.min_iterations and delta <= settings.tolerance * scale:
+                    converged = True
+                    stop_reason = "tolerance"
+                    previous_objective = objective
+                    break
+            previous_objective = objective
 
     # --- Class alignment ----------------------------------------------------------------------
     alignment_permutation: tuple[int, ...] = ()
@@ -480,6 +627,7 @@ def fit_dawid_skene(
         confusion=confusion,
         prior=prior,
         posterior=posterior,
+        state=updated_state,
     )
 
     if not converged:

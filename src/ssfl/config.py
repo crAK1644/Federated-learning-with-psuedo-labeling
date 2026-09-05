@@ -115,6 +115,19 @@ class DawidSkeneAbstentionMode(str, Enum):
     explicit = "explicit"
 
 
+class DawidSkeneConfusionPrior(str, Enum):
+    """Shape of the Dirichlet prior on a client's confusion rows.
+
+    ``uniform`` is the historical behaviour: the pseudocount is spread flat, so raising it shrinks
+    every client towards the uniform matrix and erases the vote signal. ``diagonal`` centres the
+    prior on a diagonally dominant matrix, which makes deterministic majority vote the
+    infinite-pseudocount limit of the estimator rather than a different algorithm.
+    """
+
+    uniform = "uniform"
+    diagonal = "diagonal"
+
+
 class DeviceKind(str, Enum):
     cpu = "cpu"
     cuda = "cuda"
@@ -270,6 +283,17 @@ class ExperimentConfig(BaseModel):
     # arms are only comparable while they label the same open-set items, so a divergence is a
     # failed experiment, not a metric to plot afterwards.
     dawid_skene_require_matching_valid_mask: bool = False
+    # Server-side aggregation only -- these four change what replaces majority vote and nothing
+    # else. The defaults reproduce the previous estimator exactly, so runs made before this field
+    # existed stay bit-identical and comparable.
+    dawid_skene_confusion_prior: DawidSkeneConfusionPrior = DawidSkeneConfusionPrior.uniform
+    dawid_skene_confusion_prior_diagonal: float = 0.9
+    # > 0 enables online EM: per-client confusion sufficient statistics are carried across rounds
+    # with this decay instead of refit from a single round's votes. 0.0 keeps batch EM.
+    dawid_skene_state_decay: float = 0.0
+    # Initial prior mass in units of "rounds of one client's own evidence", so the number
+    # transfers across datasets rather than encoding this open set's size.
+    dawid_skene_state_init_rounds: float = 0.0
 
     # --- DS-FL-specific ------------------------------------------------
     dsfl_temperature: float = 0.1
@@ -372,6 +396,14 @@ class ExperimentConfig(BaseModel):
         ):
             if value < 0:
                 raise ValueError("dawid_skene pseudocounts must be >= 0")
+        if not 0.0 <= self.dawid_skene_state_decay < 1.0:
+            raise ValueError("dawid_skene_state_decay must be in [0, 1)")
+        if self.dawid_skene_state_init_rounds < 0:
+            raise ValueError("dawid_skene_state_init_rounds must be >= 0")
+        # theta must beat chance, otherwise the prior anchors latent class c away from label c and
+        # the infinite-pseudocount limit is anti-majority rather than majority.
+        if not 0.0 < self.dawid_skene_confusion_prior_diagonal < 1.0:
+            raise ValueError("dawid_skene_confusion_prior_diagonal must be in (0, 1)")
         if self.ssfl_hard_aggregation == HardAggregation.dawid_skene_only:
             if not self.dawid_skene_class_alignment:
                 raise ValueError(

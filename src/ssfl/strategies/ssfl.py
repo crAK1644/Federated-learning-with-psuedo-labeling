@@ -24,6 +24,7 @@ from ssfl.protocols.dawid_skene import (
     ABSTAIN,
     DawidSkeneFit,
     DawidSkeneSettings,
+    DawidSkeneState,
     build_annotation_matrix,
     fit_dawid_skene,
 )
@@ -89,6 +90,9 @@ class SSFLStrategy(Strategy):
         self.require_matching_valid_mask = require_matching_valid_mask
         self.last_dawid_skene_metrics: dict[str, float] = {}
         self._current_node_ids: list[int] = []
+        # Online-EM confusion statistics, carried across rounds. Server-side only: it never
+        # goes on the wire and stays None unless dawid_skene_state_decay > 0.
+        self._ds_state: DawidSkeneState | None = None
 
     def summary(self) -> None:
         pass  # ponytail: base Strategy.start() already logs round-by-round progress.
@@ -339,11 +343,14 @@ class SSFLStrategy(Strategy):
                 majority_labels=majority.global_labels,
                 settings=self.dawid_skene_settings,
                 senders=senders,
+                state=self._ds_state,
             )
         except (ValueError, FloatingPointError, MemoryError):
             # Any estimator defect falls back to majority rather than stopping the run; the code
             # is visible in metrics so a run that silently degrades to majority is still auditable.
             return annotations, None, time.perf_counter() - started, "estimator_error"
+        if fit.state is not None:
+            self._ds_state = fit.state
         return annotations, fit, time.perf_counter() - started, fit.status
 
     def _dawid_skene_metrics(
