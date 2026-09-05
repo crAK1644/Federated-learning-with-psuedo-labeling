@@ -1,0 +1,11 @@
+{
+  "algorithm": "fl",
+  "final_centralized_metrics": {
+    "accuracy": 0.10112359550561797,
+    "loss": 2.9705672886130516
+  },
+  "final_round": 2,
+  "num_rounds": 2,
+  "run_id": "fl-s1-smoke-b0c226f50862ecc9",
+  "scenario": 1
+}

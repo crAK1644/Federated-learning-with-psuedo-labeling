@@ -1,0 +1,12 @@
+{
+  "algorithm": "dsfl",
+  "final_centralized_metrics": {
+    "accuracy": 0.335,
+    "loss": 3.3388975342974234,
+    "train_loss": 0.7889897733859802
+  },
+  "final_round": 2,
+  "num_rounds": 2,
+  "run_id": "dsfl-s1-smoke-d0e94c2df579c595",
+  "scenario": 1
+}

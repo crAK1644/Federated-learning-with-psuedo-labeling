@@ -1,0 +1,8 @@
+{
+  "algorithm": "fd",
+  "final_centralized_metrics": null,
+  "final_round": null,
+  "num_rounds": 2,
+  "run_id": "fd-s1-smoke-6bf9dfaeb5f28477",
+  "scenario": 1
+}
