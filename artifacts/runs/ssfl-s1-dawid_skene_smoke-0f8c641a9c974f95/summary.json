@@ -1,0 +1,16 @@
+{
+  "algorithm": "ssfl",
+  "attempt_id": "80678-1ce5bdadebff",
+  "final_centralized_metrics": {
+    "accuracy": 0.5102808988764045,
+    "distillation_examples": 8755,
+    "distillation_skipped": 0,
+    "loss": 12.79269228774845,
+    "train_loss": 1.3940910719245723
+  },
+  "final_round": 2,
+  "num_rounds": 2,
+  "resumed_from_round": 0,
+  "run_id": "ssfl-s1-dawid_skene_smoke-0f8c641a9c974f95",
+  "scenario": 1
+}

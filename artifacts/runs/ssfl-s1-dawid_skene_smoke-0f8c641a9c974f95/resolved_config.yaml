@@ -1,0 +1,53 @@
+algorithm: ssfl
+backbone: cnn
+batch_size: 16
+checkpoint_interval: 1
+checkpoint_rounds:
+- 1
+- 2
+client_num_cpus: 1
+client_num_gpus: 0.0
+data_path: /Users/ayberkkarataban/Federated learning with psuedo labeling/artifacts/data
+dawid_skene_annotation_rounds:
+- 1
+- 2
+dawid_skene_class_prior_pseudocount: 1.0
+dawid_skene_confusion_pseudocount: 0.1
+dawid_skene_damping: 1.0
+dawid_skene_epsilon: 1.0e-12
+dawid_skene_initialization_pseudocount: 0.01
+dawid_skene_max_iterations: 100
+dawid_skene_min_client_annotations: 1
+dawid_skene_min_clients: 3
+dawid_skene_min_item_annotations: 1
+dawid_skene_min_iterations: 2
+dawid_skene_permutation_min_diagonal_fraction: 0.5
+dawid_skene_permutation_min_majority_agreement: 0.5
+dawid_skene_posterior_threshold: 0.0
+dawid_skene_save_annotations: true
+dawid_skene_tolerance: 1.0e-06
+dawid_skene_warm_start: false
+dawid_skene_warmup_rounds: 0
+deterministic: true
+device: cpu
+dsfl_temperature: 0.1
+learning_rate: 0.0001
+local_epochs: 1
+log_every_batch: false
+logging_interval: 1
+max_concurrent_clients: 8
+num_server_rounds: 2
+output_path: /Users/ayberkkarataban/Federated learning with psuedo labeling/artifacts/runs
+paper_text_batch: false
+profile: dawid_skene_smoke
+resume_from: null
+run_kind: extension
+scenario: 1
+seed: 2023
+ssfl_discriminator_mode: enabled
+ssfl_hard_aggregation: dawid_skene_shadow
+ssfl_label_representation: hard
+ssfl_soft_label_round_decimals: null
+ssfl_threshold_policy: median
+ssfl_voting_mode: enabled
+system_monitor_interval_seconds: 1.0

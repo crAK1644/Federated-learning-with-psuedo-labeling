@@ -1,0 +1,1 @@
+{"algorithm": "ssfl", "attempt_id": "7447-20c9db45916a", "dataset_hash": "54023e3de197d9dc16f50a89425d5c44bb594486210aacf16ecaa8cccc86ba65", "device": "cpu", "level": "INFO", "logger": "ssfl", "message": "run_start", "resume_round": 0, "run_id": "ssfl-s1-experiment1_cpu_smoke_ds_only-728201294c4da3d7", "scenario": 1, "ts": 1787924513.7893178}
