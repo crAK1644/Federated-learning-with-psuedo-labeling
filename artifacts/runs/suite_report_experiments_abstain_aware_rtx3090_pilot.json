@@ -1,0 +1,10 @@
+{
+  "matrix": "configs/experiments_abstain_aware_rtx3090_pilot.yaml",
+  "results": [
+    {
+      "name": "abstain_rtx3090_explicit_10",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s3-abstain_rtx3090_explicit_10-0925fee5a53fdab3"
+    }
+  ]
+}

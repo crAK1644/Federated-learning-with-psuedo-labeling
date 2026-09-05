@@ -1,0 +1,215 @@
+{
+  "matrix": "configs/experiments_collapse.yaml",
+  "results": [
+    {
+      "name": "collapse_base_s1_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_base_s1_seed2023-e532b2c5270f316d"
+    },
+    {
+      "name": "collapse_base_s1_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_base_s1_seed2024-29ce5c08597c19c7"
+    },
+    {
+      "name": "collapse_base_s1_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_base_s1_seed2025-5ae218c1b8dd67f7"
+    },
+    {
+      "name": "collapse_base_s2_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_base_s2_seed2023-66c79adeed2262fc"
+    },
+    {
+      "name": "collapse_base_s2_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_base_s2_seed2024-622b88adf71bfd63"
+    },
+    {
+      "name": "collapse_base_s2_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_base_s2_seed2025-e1ce156c8203af15"
+    },
+    {
+      "name": "collapse_thr07_s1_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_thr07_s1_seed2023-ec82ef67e97784b1"
+    },
+    {
+      "name": "collapse_thr07_s1_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_thr07_s1_seed2024-4cbd8f52c6ec51c5"
+    },
+    {
+      "name": "collapse_thr07_s1_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_thr07_s1_seed2025-5c5c9b74182b765e"
+    },
+    {
+      "name": "collapse_thr07_s2_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_thr07_s2_seed2023-fe70c6149375c294"
+    },
+    {
+      "name": "collapse_thr07_s2_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_thr07_s2_seed2024-eb53826bdeaf6e77"
+    },
+    {
+      "name": "collapse_thr07_s2_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_thr07_s2_seed2025-7f4651fe45dbdb80"
+    },
+    {
+      "name": "collapse_thr08_s1_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_thr08_s1_seed2023-d5f0dbb78b6396fe"
+    },
+    {
+      "name": "collapse_thr08_s1_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_thr08_s1_seed2024-d50c3e5de823d8f0"
+    },
+    {
+      "name": "collapse_thr08_s1_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_thr08_s1_seed2025-09fdfb98fbdc0454"
+    },
+    {
+      "name": "collapse_thr08_s2_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_thr08_s2_seed2023-e42be2d35940bbb4"
+    },
+    {
+      "name": "collapse_thr08_s2_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_thr08_s2_seed2024-cb9ef3cf76db7c40"
+    },
+    {
+      "name": "collapse_thr08_s2_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_thr08_s2_seed2025-00df6a2b22344ed9"
+    },
+    {
+      "name": "collapse_thr09_s1_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_thr09_s1_seed2023-5211be79a81e66ef"
+    },
+    {
+      "name": "collapse_thr09_s1_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_thr09_s1_seed2024-142386268b612116"
+    },
+    {
+      "name": "collapse_thr09_s1_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_thr09_s1_seed2025-79a7a9aeb9d1426c"
+    },
+    {
+      "name": "collapse_thr09_s2_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_thr09_s2_seed2023-fec662e7931cc69b"
+    },
+    {
+      "name": "collapse_thr09_s2_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_thr09_s2_seed2024-5a329df875dda122"
+    },
+    {
+      "name": "collapse_thr09_s2_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_thr09_s2_seed2025-63f8794e2114d1fb"
+    },
+    {
+      "name": "collapse_soft_s1_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_soft_s1_seed2023-7568a205ca9fbcc9"
+    },
+    {
+      "name": "collapse_soft_s1_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_soft_s1_seed2024-1ea2eebd3b2ac3b1"
+    },
+    {
+      "name": "collapse_soft_s1_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_soft_s1_seed2025-ef3a049efea672f0"
+    },
+    {
+      "name": "collapse_soft_s2_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_soft_s2_seed2023-cb8f3d93e431ee84"
+    },
+    {
+      "name": "collapse_soft_s2_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_soft_s2_seed2024-af9c66361ac4e3b8"
+    },
+    {
+      "name": "collapse_soft_s2_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_soft_s2_seed2025-9a2e24595ae5e0c9"
+    },
+    {
+      "name": "collapse_margin2_s1_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_margin2_s1_seed2023-df5b10e0ff4421a0"
+    },
+    {
+      "name": "collapse_margin2_s1_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_margin2_s1_seed2024-d775e13a72e6f31e"
+    },
+    {
+      "name": "collapse_margin2_s1_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_margin2_s1_seed2025-eb8934caf8fe1f1a"
+    },
+    {
+      "name": "collapse_margin2_s2_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_margin2_s2_seed2023-2e411deae674a1fa"
+    },
+    {
+      "name": "collapse_margin2_s2_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_margin2_s2_seed2024-877c189743cec786"
+    },
+    {
+      "name": "collapse_margin2_s2_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_margin2_s2_seed2025-73fc9ac0a3b1c927"
+    },
+    {
+      "name": "collapse_privnorm_s1_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_privnorm_s1_seed2023-4ad5bcd320c583a9"
+    },
+    {
+      "name": "collapse_privnorm_s1_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_privnorm_s1_seed2024-365a729bebd8e7cd"
+    },
+    {
+      "name": "collapse_privnorm_s1_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_privnorm_s1_seed2025-7decf16e86054197"
+    },
+    {
+      "name": "collapse_privnorm_s2_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_privnorm_s2_seed2023-86300f8b3ded2021"
+    },
+    {
+      "name": "collapse_privnorm_s2_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_privnorm_s2_seed2024-b43d97d372dd5c96"
+    },
+    {
+      "name": "collapse_privnorm_s2_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-collapse_privnorm_s2_seed2025-17c4be924fddccbe"
+    }
+  ]
+}

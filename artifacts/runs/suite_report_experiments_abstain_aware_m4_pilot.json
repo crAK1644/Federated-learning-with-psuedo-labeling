@@ -1,0 +1,17 @@
+{
+  "matrix": "configs/experiments_abstain_aware_m4_pilot.yaml",
+  "results": [
+    {
+      "name": "abstain_m4_control_10",
+      "status": "failed",
+      "run_dir": "artifacts/runs/ssfl-s3-abstain_m4_control_10-524466f5cbdd401f",
+      "exit_code": 1
+    },
+    {
+      "name": "abstain_m4_explicit_10",
+      "status": "failed",
+      "run_dir": "artifacts/runs/ssfl-s3-abstain_m4_explicit_10-84749a4a4be668d9",
+      "exit_code": 1
+    }
+  ]
+}

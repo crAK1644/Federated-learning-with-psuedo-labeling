@@ -1,0 +1,15 @@
+{
+  "matrix": "configs/experiments_collapse_fast.yaml",
+  "results": [
+    {
+      "name": "fast_base_s1_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-fast_base_s1_seed2023-53dcf0972d905951"
+    },
+    {
+      "name": "fast_quantile_s1_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-fast_quantile_s1_seed2023-16c8c9222e760dd4"
+    }
+  ]
+}
