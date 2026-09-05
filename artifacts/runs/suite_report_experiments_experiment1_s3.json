@@ -1,0 +1,20 @@
+{
+  "matrix": "configs/experiments_experiment1_s3.yaml",
+  "results": [
+    {
+      "name": "experiment1_s3_mv_200",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s3-experiment1_s3_mv_200-1d1e9806cc03a4e2"
+    },
+    {
+      "name": "experiment1_s3_ds_only_200",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s3-experiment1_s3_ds_only_200-f909dbf5df35b6ba"
+    },
+    {
+      "name": "experiment1_s3_hybrid_200",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s3-experiment1_s3_hybrid_200-3a8e7fcfe5bbeda6"
+    }
+  ]
+}

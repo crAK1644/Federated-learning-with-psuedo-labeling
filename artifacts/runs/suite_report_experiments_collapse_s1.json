@@ -1,0 +1,35 @@
+{
+  "matrix": "configs/experiments_collapse_s1.yaml",
+  "results": [
+    {
+      "name": "collapse_base_s1_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_base_s1_seed2023-b140d07648dcb465"
+    },
+    {
+      "name": "collapse_base_s1_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_base_s1_seed2024-68f85f738b9c49e9"
+    },
+    {
+      "name": "collapse_base_s1_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_base_s1_seed2025-0f4ac42dfbfa588a"
+    },
+    {
+      "name": "collapse_quantile_s1_seed2023",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_quantile_s1_seed2023-704749c39a944aa1"
+    },
+    {
+      "name": "collapse_quantile_s1_seed2024",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_quantile_s1_seed2024-92448242e71dc7ee"
+    },
+    {
+      "name": "collapse_quantile_s1_seed2025",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-collapse_quantile_s1_seed2025-61b5efa872dfb46f"
+    }
+  ]
+}

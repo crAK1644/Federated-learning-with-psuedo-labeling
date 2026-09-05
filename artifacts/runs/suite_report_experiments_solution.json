@@ -1,0 +1,20 @@
+{
+  "matrix": "configs/experiments_solution.yaml",
+  "results": [
+    {
+      "name": "ssfl_cnn_s1",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s1-ssfl_cnn_s1-de2da8c8e5346567"
+    },
+    {
+      "name": "ssfl_cnn_s2",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s2-ssfl_cnn_s2-c2d8baf360ee4df2"
+    },
+    {
+      "name": "ssfl_cnn_s3",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s3-ssfl_cnn_s3-b436aa2e4e92e21b"
+    }
+  ]
+}

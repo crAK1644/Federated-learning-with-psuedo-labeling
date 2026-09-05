@@ -1,0 +1,35 @@
+{
+  "matrix": "configs/experiments_controlled_pair.yaml",
+  "results": [
+    {
+      "name": "controlled_specialist_majority",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s4-controlled_specialist_majority-d56474315e3a6804"
+    },
+    {
+      "name": "controlled_specialist_shadow",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s4-controlled_specialist_shadow-c57b667d8cfc4ed5"
+    },
+    {
+      "name": "controlled_specialist_active",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s4-controlled_specialist_active-78cc838b0130f66b"
+    },
+    {
+      "name": "controlled_balanced_majority",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s4-controlled_balanced_majority-863d56c1a324348c"
+    },
+    {
+      "name": "controlled_balanced_shadow",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s4-controlled_balanced_shadow-c70d046b26b63fa2"
+    },
+    {
+      "name": "controlled_balanced_active",
+      "status": "dry_run",
+      "run_dir": "artifacts/runs/ssfl-s4-controlled_balanced_active-f6453e4fe4267bd4"
+    }
+  ]
+}

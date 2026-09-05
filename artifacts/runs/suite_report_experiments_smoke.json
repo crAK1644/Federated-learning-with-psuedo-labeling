@@ -1,0 +1,20 @@
+{
+  "matrix": "configs/experiments_smoke.yaml",
+  "results": [
+    {
+      "name": "smoke_ablation_no_discriminator",
+      "status": "skipped",
+      "run_dir": "artifacts/runs/ssfl-s1-smoke_ablation_no_discriminator-f96e882074fc4363"
+    },
+    {
+      "name": "smoke_threshold_0_8",
+      "status": "skipped",
+      "run_dir": "artifacts/runs/ssfl-s1-smoke_threshold_0_8-fa2bb7ac0540a439"
+    },
+    {
+      "name": "smoke_label_soft_4dp",
+      "status": "skipped",
+      "run_dir": "artifacts/runs/ssfl-s1-smoke_label_soft_4dp-7646e0b6515e45f7"
+    }
+  ]
+}
