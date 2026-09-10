@@ -87,6 +87,33 @@ def progress(run_dir: Path) -> tuple[int, float | None, float | None]:
     return latest_round, started, last_ts
 
 
+def expected_manifest(matrix: Path) -> str | None:
+    match = re.search(r"^dataset_manifest_hash:\s*(\S+)", matrix.read_text(), flags=re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def pick_run(matches: list[str], manifest: str | None) -> Path | None:
+    """Choose among run directories that share an entry name.
+
+    Entry names are reused across partitions on purpose -- a seed-2026 replicate runs the *same*
+    arms on new data -- so a name can glob to several directories, and taking the first would
+    happily report a finished 2023 run as this matrix's progress. The matrix's own
+    dataset_manifest_hash is the discriminator; each run dir carries the manifest it ran against.
+    When the matrix declares a hash, a directory that does not carry it is somebody else's run:
+    report the entry as queued rather than falling back to it.
+    """
+    paths = sorted(Path(m) for m in matches)
+    if not manifest:
+        return paths[0] if paths else None
+    for path in paths:
+        stored = path / "dataset_manifest.json"
+        if not stored.is_file():
+            continue
+        if json.loads(stored.read_text()).get("manifest_hash") == manifest:
+            return path
+    return None
+
+
 def total_rounds(run_dir: Path) -> int:
     match = re.search(r"num_server_rounds:\s*(\d+)", (run_dir / "resolved_config.yaml").read_text())
     return int(match.group(1)) if match else 0
@@ -107,6 +134,7 @@ def render(matrix: Path) -> str:
     done_total = pending_total = 0
     rates: list[float] = []
     queued = queued_rounds(matrix)
+    manifest = expected_manifest(matrix)
 
     for name in entry_names(matrix):
         matches = glob.glob(str(REPO / "artifacts" / "runs" / f"ssfl-s*-{name}-*"))
@@ -114,7 +142,11 @@ def render(matrix: Path) -> str:
             lines.append(f"  {name:<14} queued")
             pending_total += queued
             continue
-        run_dir = Path(matches[0])
+        run_dir = pick_run(matches, manifest)
+        if run_dir is None:
+            lines.append(f"  {name:<14} queued")
+            pending_total += queued
+            continue
         total = total_rounds(run_dir)
         done, started, last_ts = progress(run_dir)
         complete = (run_dir / "summary.json").exists()
