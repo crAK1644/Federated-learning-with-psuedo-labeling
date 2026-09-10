@@ -1,0 +1,82 @@
+# Seed 2026 replicate on a FRESH partition: majority vote and streaming Dawid-Skene.
+#
+# Run from the repository root (on the RTX box that is ~/Desktop/SSFL/ssfl-code), AFTER preparing
+# the seed-2026 dataset (see PREREQUISITE below):
+#   uv run python -m ssfl.experiments.run_suite \
+#     --matrix configs/experiments_ds_streaming_seed2026.yaml
+#
+# WHY. The +0.0349 last-20 gap between ds_streaming_rtx3090_200 and experiment1_s3_mv_200 is n=1:
+# one partition, one seed, one run per arm. This replicate redraws BOTH sources of randomness at
+# once -- a new client partition and a new training seed -- which is the harder test: does the
+# ordering survive a different client population, not just different initial weights.
+#
+# WHAT CHANGES vs the 2023 pair:
+#   data_path  artifacts/data -> artifacts/data-2026   (new partition, prep seed 2026)
+#   seed       2023 -> 2026                            (model init, loader shuffles)
+# Nothing else. Aggregation, backbone, rounds, epochs, batch size, learning rate, normalization
+# (min-max, all_mini), Dirichlet alpha 0.1, scenario 3, 89 clients: all identical.
+#
+# BOTH ARMS RERUN. Comparing a seed-2026 DS run against the seed-2023 MV run would confound the
+# aggregator with the partition. The pair is the unit of comparison, not the individual arm.
+#
+# READ THE ABSOLUTE NUMBERS WITH CARE. A new partition moves the reachable ceiling: the 2023 draw
+# left gafgyt.tcp/gafgyt.udp with no separator client (21 clients always say tcp, 6 always say udp,
+# none is right on both), which caps ANY vote-based aggregator at 0.8989 and accounts for 1800 of
+# each arm's errors. A different draw can produce a different pair structure, a different ceiling,
+# and therefore different absolute accuracies in both arms. What transfers across partitions is the
+# SIGN and rough size of the DS-minus-MV gap, not 0.8714 or 0.8365.
+#
+# DS HYPERPARAMETERS are copied verbatim from configs/experiments_ds_streaming_rtx3090_200.yaml and
+# are NOT re-tuned for this partition. Re-tuning per draw would make the replicate measure the
+# tuner rather than the aggregator. See that file for how theta/alpha/rho/R0 were chosen. R0 is
+# expressed in rounds of a client's own evidence precisely so that it transfers to a partition with
+# different per-client vote counts without meaning something else.
+#
+# ORDER. Majority first: it is the reference the DS arm is read against, and the only entry
+# interpretable standing alone. Sequential, never parallel -- eight concurrent clients at 0.125 GPU
+# each already saturate the card.
+#
+# ENTRY NAMES are deliberately identical to the 2023 matrices. These are the same arms, not new
+# ones; compute_run_id covers both seed and the dataset manifest, so the run directories differ by
+# hash and nothing from 2023 is overwritten.
+#
+# BUDGET. 2 x 200 = 400 rounds at the ~144 s/round measured on this hardware: roughly 8 h per arm,
+# 16 h end to end, plus ~10 min for the data prep.
+#
+# PREREQUISITE -- the seed-2026 partition. Prepared on the RTX box on 2026-09-08 at commit e9b1a13;
+# every flag other than seed/output kept its default, which is exactly what the 2023 prep used
+# (1000 samples/subset, 0.7/0.1/0.2 split, all_mini, dirichlet alpha 0.1):
+#
+#   uv run python -m ssfl.data.prepare_data \
+#     --input <N-BaIoT CSV root> --output artifacts/data-2026 --seed 2026
+#
+# It reproduced the 2023 structure exactly -- 89 source files, 62300/8900/17800 private/open/test,
+# the same 11-class label_map, 89 scenario-3 clients -- with a different draw. That is the point:
+# same shape, new randomness.
+#
+# The hash below is what that prep wrote. It exists to catch one specific silent failure: the
+# partition being re-prepared between the two arms. Nothing else would notice -- both runs would
+# finish normally and simply would not be comparable.
+#
+# IT IS MACHINE- AND COMMIT-LOCAL. manifest_hash covers tool_version.git_commit and the checksums of
+# the generated allocation PNGs, so a re-prep at a different commit yields a different hash even
+# from identical data. On a checkout that is not the RTX box at e9b1a13, re-prep and replace this
+# value, or blank the line to skip the check.
+dataset_manifest_hash: f74ac1a4a2e54ba7503ff233bf4d7c8c5af5c9f63fd3a0e2f9850ba63deb95f4
+
+entries:
+  - name: experiment1_s3_mv_200
+    base_profile: experiment1_s3_mv
+    overrides:
+      seed: 2026
+      data_path: artifacts/data-2026
+  - name: ds_streaming_rtx3090_200
+    base_profile: experiment1_s3_ds_only
+    overrides:
+      seed: 2026
+      data_path: artifacts/data-2026
+      dawid_skene_confusion_prior: diagonal
+      dawid_skene_confusion_prior_diagonal: 0.95
+      dawid_skene_confusion_pseudocount: 20.0
+      dawid_skene_state_decay: 0.9
+      dawid_skene_state_init_rounds: 150.0

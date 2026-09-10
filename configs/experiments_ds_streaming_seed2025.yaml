@@ -1,0 +1,82 @@
+# Seed 2025 replicate on a FRESH partition: majority vote and streaming Dawid-Skene.
+#
+# Run from the repository root (on the RTX box that is ~/Desktop/SSFL/ssfl-code), AFTER preparing
+# the seed-2025 dataset (see PREREQUISITE below):
+#   uv run python -m ssfl.experiments.run_suite \
+#     --matrix configs/experiments_ds_streaming_seed2025.yaml
+#
+# The full rationale for this design -- why both arms are rerun, why the DS hyperparameters are not
+# re-tuned per draw, why the entry names are deliberately reused -- is written out in
+# configs/experiments_ds_streaming_seed2026.yaml and is not repeated here. This file records only
+# what is specific to the third seed.
+#
+# WHY A THIRD SEED. Two draws are in:
+#
+#   partition   last-20 DS   last-20 MV      gap   DS ahead in   reachable errors MV -> DS
+#   2023            0.8714       0.8365   +0.0349       199/200            1119 -> 455  (-59%)
+#   2026            0.8813       0.8584   +0.0230        70/200             677 -> 303  (-55%)
+#
+# The endpoint replicated: same sign, same order of magnitude, and near-identical reduction in
+# reachable errors. The TRAJECTORY did not. On 2023 the DS arm led from round 1 and its worst round
+# was -0.0042; on 2026 it trailed until round 134 (worst round -0.0956) and only crossed for good
+# at 135. So the two draws disagree about the mechanism, which is the part of the report that makes
+# a claim about *why* Dawid-Skene helps. A third draw is what decides whether "DS converges higher"
+# is the durable statement and the early-round lead was a 2023 accident, or whether the trajectory
+# is genuinely bimodal across partitions.
+#
+# This means the third seed is READ DIFFERENTLY from the second. The quantity of interest is not
+# only the last-20 gap; it is the crossover round and the sign of the early-round gap. Record both.
+#
+# WHAT CHANGES vs the 2023 pair:
+#   data_path  artifacts/data -> artifacts/data-2025   (new partition, prep seed 2025)
+#   seed       2023 -> 2025                            (model init, loader shuffles)
+# Nothing else.
+#
+# THE UNREACHABLE PAIR IS NOW EXPECTED, NOT ASSUMED. gafgyt.tcp/gafgyt.udp had no separator client
+# on either previous draw, and both arms collapsed it one-directionally: ~1800 errors and a ceiling
+# of 0.8989 (2023) / 0.8990 (2026), with majority vote collapsing to tcp and DS to udp both times.
+# Two draws is evidence that this is structural to N-BaIoT rather than a property of one partition,
+# but it is still not guaranteed. scripts/ds_seed_compare.py finds whichever pair dominates instead
+# of assuming this one, and flags it if the pair differs.
+#
+# BUDGET. 2 x 200 = 400 rounds at ~144 s/round: roughly 8 h per arm, 16 h end to end, plus ~10 min
+# for the data prep. Majority first; sequential, never parallel.
+#
+# PREREQUISITE -- the seed-2025 partition. Every flag other than seed/output keeps its default,
+# which is what both earlier preps used (1000 samples/subset, 0.7/0.1/0.2 split, all_mini,
+# dirichlet alpha 0.1). On the RTX box the CSV root is
+# /home/ayla/Desktop/SSFL/Federated-learning-with-psuedo-labeling/data:
+#
+#   uv run python -m ssfl.data.prepare_data \
+#     --input <N-BaIoT CSV root> --output artifacts/data-2025 --seed 2025
+#
+# Expect it to reproduce the same structure with a different draw: 89 source files,
+# 62300/8900/17800 private/open/test, the same 11-class label_map, 89 scenario-3 clients. If any of
+# those differs, stop -- the partition is not comparable and the replicate is meaningless.
+#
+# The hash below must be the manifest_hash that prep wrote. It exists to catch one specific silent
+# failure: the partition being re-prepared between the two arms. Nothing else would notice -- both
+# runs would finish normally and simply would not be comparable.
+#
+# IT IS MACHINE- AND COMMIT-LOCAL. manifest_hash covers tool_version.git_commit and the checksums of
+# the generated allocation PNGs, so a re-prep at a different commit yields a different hash even
+# from identical data. Fill it in from artifacts/data-2025/dataset_manifest.json after the prep;
+# run_suite refuses to start while it is the placeholder below.
+dataset_manifest_hash: FILL_ME_FROM_THE_PREP
+
+entries:
+  - name: experiment1_s3_mv_200
+    base_profile: experiment1_s3_mv
+    overrides:
+      seed: 2025
+      data_path: artifacts/data-2025
+  - name: ds_streaming_rtx3090_200
+    base_profile: experiment1_s3_ds_only
+    overrides:
+      seed: 2025
+      data_path: artifacts/data-2025
+      dawid_skene_confusion_prior: diagonal
+      dawid_skene_confusion_prior_diagonal: 0.95
+      dawid_skene_confusion_pseudocount: 20.0
+      dawid_skene_state_decay: 0.9
+      dawid_skene_state_init_rounds: 150.0
